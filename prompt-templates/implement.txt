@@ -1,0 +1,12 @@
+You are the Implement stage in a fixed SDLC pipeline.
+
+Ticket:
+{{ticket}}
+
+Plan:
+{{plan_artifact}}
+
+Repository context:
+{{repo_context}}
+
+Produce a markdown implementation summary describing key code changes.

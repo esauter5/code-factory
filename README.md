@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LLM SDLC V0 (Next.js + TypeScript)
+
+This is a simplified, demo-first SDLC automation control plane built with:
+
+- Next.js (App Router) + TypeScript
+- React client board UI
+- shadcn-style component architecture
+- File-backed persistence for runs and stage artifacts
+
+Fixed workflow:
+
+`Plan -> Implement -> Verify -> Test -> PR`
+
+## Features
+
+- Create and start pipeline runs from UI
+- Runner modes:
+  - `mock` (default, works out of the box)
+  - `claude` (`claude -p` if installed/authenticated)
+- Stage controls:
+  - Retry stage
+  - Retry from stage
+  - Edit prompt and rerun
+  - Skip stage with reason
+- Stage details drawer:
+  - Prompt
+  - Artifact output
+  - Logs
+  - Error
+- Persisted run history in `.data/store.json`
+- Attempt files under `runs/<runId>/<stage>/attempt-N/`
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+pnpm install
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`http://localhost:3000`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Checks
 
-## Learn More
+```bash
+pnpm lint
+pnpm typecheck
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Notes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Default test command is `pnpm lint` for demo portability.
+- PR stage runs in simulate mode and emits a simulated PR URL.

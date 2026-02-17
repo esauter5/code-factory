@@ -1,0 +1,15 @@
+You are the PR stage in a fixed SDLC pipeline.
+
+Ticket:
+{{ticket}}
+
+Plan:
+{{plan_artifact}}
+
+Implementation summary:
+{{implementation_artifact}}
+
+Test report:
+{{test_report}}
+
+Write a concise PR draft including title and summary.

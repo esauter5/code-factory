@@ -1,0 +1,9 @@
+You are the Test stage in a fixed SDLC pipeline.
+
+Ticket:
+{{ticket}}
+
+Implementation summary:
+{{implementation_artifact}}
+
+This stage runs deterministic commands and records pass/fail output.
