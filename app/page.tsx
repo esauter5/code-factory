@@ -82,7 +82,7 @@ export default function Page() {
         </div>
       )}
 
-      <main className="flex-1 min-h-0 p-2">
+      <main className="flex-1 min-h-0 overflow-hidden md:overflow-x-auto p-1.5 md:p-2">
         <KanbanBoard boardColumns={boardColumns} onCardClick={openRunDetail} />
       </main>
 

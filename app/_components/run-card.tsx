@@ -50,7 +50,7 @@ export function RunCard({
       onClick={onClick}
       className={cn(
         "w-full rounded-md border border-l-[3px] bg-card p-2.5 text-left transition-all",
-        "hover:shadow-md hover:border-primary/30",
+        "hover:shadow-md hover:border-primary/30 active:scale-[0.98] active:shadow-sm",
         borderByStatus[run.status],
       )}
     >
