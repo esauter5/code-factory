@@ -33,7 +33,7 @@ export function EditPromptDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Edit prompt for {stageName}</DialogTitle>
           <DialogDescription>
@@ -41,7 +41,7 @@ export function EditPromptDialog({
           </DialogDescription>
         </DialogHeader>
         <Textarea
-          className="min-h-[200px] font-mono text-xs"
+          className="min-h-[200px] max-h-[60vh] flex-1 font-mono text-xs overflow-y-auto resize-y"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="Enter prompt..."

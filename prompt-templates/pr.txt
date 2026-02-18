@@ -12,7 +12,9 @@ Implementation summary:
 Test report:
 {{test_report}}
 
-If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+If the file {{progress_path}} exists, read it for context on prior attempts and adjust your approach accordingly.
+
+{{feedback}}
 
 Write a concise PR draft including title and summary.
 

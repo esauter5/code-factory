@@ -26,15 +26,15 @@
   --ring: oklch(0.708 0 0);
 
   /* Status colors */
-  --status-running: #2563eb;
+  --status-running: #1d4ed8;
   --status-running-soft: #dbeafe;
-  --status-failed: #dc2626;
+  --status-failed: #b91c1c;
   --status-failed-soft: #fee2e2;
-  --status-done: #16a34a;
+  --status-done: #166534;
   --status-done-soft: #dcfce7;
-  --status-queued: #737373;
+  --status-queued: #525252;
   --status-queued-soft: #f5f5f5;
-  --status-skipped: #6b7280;
+  --status-skipped: #4b5563;
   --status-skipped-soft: #f3f4f6;
 
   /* Column backgrounds */

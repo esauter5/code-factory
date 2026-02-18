@@ -9,7 +9,9 @@ Plan:
 Implementation summary:
 {{implementation_artifact}}
 
-If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+If the file {{progress_path}} exists, read it for context on prior attempts and adjust your approach accordingly.
+
+{{feedback}}
 
 Review for blocker-level issues only.
 If blockers exist, include lines beginning with BLOCKER:.

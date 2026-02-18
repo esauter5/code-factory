@@ -267,11 +267,65 @@ export class HarnessOrchestrator {
       ticket: run.ticket,
       repo_path: run.repoPath,
       repo_context: run.repoContext,
+      progress_path: this.progressPath(run.id),
       plan_artifact: latestOutput(run, "Plan"),
       implementation_artifact: latestOutput(run, "Implement"),
       verify_artifact: latestOutput(run, "Verify"),
       test_report: latestOutput(run, "Test"),
+      feedback: this.buildFeedback(run, stageName),
     });
+  }
+
+  private buildFeedback(run: RunRecord, stageName: StageName): string {
+    const lines: string[] = [];
+    const stageIdx = STAGE_ORDER.indexOf(stageName);
+    const stage = run.stages.find((s) => s.name === stageName);
+
+    // Same-stage: prior failed attempts of THIS stage
+    if (stage) {
+      const failedAttempts = stage.attempts.filter((a) => a.status === "failed");
+      for (const attempt of failedAttempts) {
+        lines.push(`### ${stageName} — Attempt ${attempt.attempt} (failed)`);
+        if (attempt.error) {
+          lines.push(`Error: ${attempt.error}`);
+        }
+        if (attempt.outputPreview) {
+          lines.push(`Output: ${attempt.outputPreview.slice(0, 2000)}`);
+        }
+        lines.push("");
+      }
+    }
+
+    // Cross-stage: downstream stage failures
+    for (let i = stageIdx + 1; i < STAGE_ORDER.length; i += 1) {
+      const downstreamName = STAGE_ORDER[i];
+      const downstream = run.stages.find((s) => s.name === downstreamName);
+      if (!downstream || downstream.attempts.length === 0) continue;
+      const lastAttempt = downstream.attempts[downstream.attempts.length - 1];
+      if (lastAttempt.status !== "failed") continue;
+
+      lines.push(`### ${downstreamName} stage feedback (failed)`);
+      if (lastAttempt.error) {
+        lines.push(`Error: ${lastAttempt.error}`);
+      }
+      if (lastAttempt.outputPreview) {
+        lines.push(`Output: ${lastAttempt.outputPreview.slice(0, 2000)}`);
+      }
+      if (lastAttempt.logsPreview) {
+        lines.push(`Logs: ${lastAttempt.logsPreview.slice(0, 2000)}`);
+      }
+      lines.push("");
+    }
+
+    if (lines.length === 0) return "";
+
+    return [
+      "## Feedback from prior attempts",
+      "",
+      "The following issues were found in previous attempts. You MUST address these in this attempt.",
+      "",
+      ...lines,
+    ].join("\n");
   }
 
   private async executeStage(run: RunRecord, stageName: StageName, prompt: string): Promise<RunnerResult> {
@@ -283,7 +337,7 @@ export class HarnessOrchestrator {
 
     let result: RunnerResult;
     if (run.runnerMode === "claude") {
-      result = await runClaudePrompt(prompt, timeoutMs);
+      result = await runClaudePrompt(prompt, run.repoPath, timeoutMs);
     } else {
       result = await runMockStage(stageName, prompt);
     }

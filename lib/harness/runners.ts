@@ -77,10 +77,11 @@ async function runCommand(options: RunCommandOptions): Promise<RunnerResult> {
   });
 }
 
-export async function runClaudePrompt(prompt: string, timeoutMs: number): Promise<RunnerResult> {
+export async function runClaudePrompt(prompt: string, cwd: string, timeoutMs: number): Promise<RunnerResult> {
   return runCommand({
     command: "claude",
-    args: ["-p", prompt],
+    args: ["-p", "--verbose", prompt],
+    cwd,
     timeoutMs,
   });
 }
