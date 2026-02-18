@@ -6,6 +6,8 @@ Ticket:
 Repository context:
 {{repo_context}}
 
+If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+
 Return a concise markdown plan with:
 1) Scope
 2) Implementation approach

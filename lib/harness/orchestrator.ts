@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import path from "node:path";
 
 import { buildRepoContext, latestOutput, loadStageTemplate, renderTemplate } from "@/lib/harness/prompts";
@@ -95,6 +95,15 @@ export class HarnessOrchestrator {
       message: "Run created",
     });
     await this.store.createRun(run);
+
+    const progressDir = path.dirname(this.progressPath(run.id));
+    await mkdir(progressDir, { recursive: true });
+    await writeFile(
+      this.progressPath(run.id),
+      `# Progress — Run ${run.id}\n\nTicket: ${run.ticket}\n\n`,
+      "utf8",
+    );
+
     await this.startRun(run.id);
     return (await this.store.getRun(run.id)) as RunRecord;
   }
@@ -254,6 +263,7 @@ export class HarnessOrchestrator {
   private async buildPrompt(run: RunRecord, stageName: StageName): Promise<string> {
     const template = await loadStageTemplate(stageName);
     return renderTemplate(template, {
+      run_id: run.id,
       ticket: run.ticket,
       repo_path: run.repoPath,
       repo_context: run.repoContext,
@@ -332,6 +342,8 @@ export class HarnessOrchestrator {
     attempt.logsPreview = result.logs.slice(0, 4000);
     attempt.error = result.error;
 
+    await this.appendProgress(runId, stageName, attempt.attempt, result);
+
     stage.endedAt = nowIso();
     run.updatedAt = nowIso();
     if (result.success) {
@@ -375,6 +387,38 @@ export class HarnessOrchestrator {
       writeFile(logsPath, logs, "utf8"),
     ]);
     return { artifactPath, logsPath };
+  }
+
+  private progressPath(runId: string): string {
+    return path.join(process.cwd(), "runs", runId, "progress.md");
+  }
+
+  private async appendProgress(
+    runId: string,
+    stageName: StageName,
+    attemptNumber: number,
+    result: RunnerResult,
+  ): Promise<void> {
+    const filePath = this.progressPath(runId);
+    await mkdir(path.dirname(filePath), { recursive: true });
+
+    const status = result.success ? "done" : "failed";
+    const lines = [
+      `## ${stageName} | Attempt ${attemptNumber} | ${status}`,
+      `- Timestamp: ${nowIso()}`,
+    ];
+
+    if (result.error) {
+      lines.push(`- Error: ${result.error}`);
+    }
+
+    const preview = result.output.slice(0, 500).trim();
+    if (preview) {
+      lines.push(`- Output summary: ${preview}`);
+    }
+
+    lines.push("", "");
+    await appendFile(filePath, lines.join("\n"), "utf8");
   }
 
   private async requireRun(runId: string): Promise<RunRecord> {

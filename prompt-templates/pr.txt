@@ -12,4 +12,8 @@ Implementation summary:
 Test report:
 {{test_report}}
 
+If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+
 Write a concise PR draft including title and summary.
+
+After the PR draft, include a section titled "## Suggested CLAUDE.md Updates" listing any new files, patterns, conventions, or architectural decisions introduced by this change that would be useful for future agents working on this codebase. If nothing notable was introduced, write "No updates suggested."

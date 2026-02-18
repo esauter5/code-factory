@@ -9,4 +9,6 @@ Plan:
 Repository context:
 {{repo_context}}
 
+If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+
 Produce a markdown implementation summary describing key code changes.

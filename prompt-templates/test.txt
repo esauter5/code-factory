@@ -6,4 +6,6 @@ Ticket:
 Implementation summary:
 {{implementation_artifact}}
 
+If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+
 This stage runs deterministic commands and records pass/fail output.

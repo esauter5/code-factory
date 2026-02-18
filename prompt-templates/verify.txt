@@ -9,6 +9,8 @@ Plan:
 Implementation summary:
 {{implementation_artifact}}
 
+If the file runs/{{run_id}}/progress.md exists, read it for context on prior attempts and adjust your approach accordingly.
+
 Review for blocker-level issues only.
 If blockers exist, include lines beginning with BLOCKER:.
 If no blockers exist, state exactly: No blocker findings.
