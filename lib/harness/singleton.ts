@@ -10,7 +10,7 @@ const globalForHarness = globalThis as {
 
 // Bump this when runner/orchestrator behavior changes so the
 // singleton is recreated after hot-reload in dev mode.
-const CODE_VERSION = 2;
+const CODE_VERSION = 3;
 
 export function getOrchestrator(): HarnessOrchestrator {
   if (

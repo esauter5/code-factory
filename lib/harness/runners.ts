@@ -11,8 +11,10 @@ interface StreamJsonEvent {
   message?: {
     content: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
   };
-  cost_usd?: number;
+  result?: string;
+  total_cost_usd?: number;
   duration_ms?: number;
+  is_error?: boolean;
 }
 
 function parseStreamJsonOutput(raw: string): { output: string; success: boolean; error: string } {
@@ -44,10 +46,16 @@ function parseStreamJsonOutput(raw: string): { output: string; success: boolean;
   // Check result event for success/error
   const resultEvent = events.find((e) => e.type === "result");
   if (resultEvent) {
-    if (resultEvent.subtype === "error") {
-      return { output, success: false, error: "Claude returned an error result" };
+    if (resultEvent.subtype === "error" || resultEvent.is_error) {
+      return {
+        output: output || resultEvent.result || "",
+        success: false,
+        error: resultEvent.result || "Claude returned an error result",
+      };
     }
-    return { output, success: true, error: "" };
+    // Use result.result as fallback if no assistant text was extracted
+    const finalOutput = output || resultEvent.result || "";
+    return { output: finalOutput, success: true, error: "" };
   }
 
   // No result event — treat as success if we got output
@@ -73,7 +81,7 @@ export async function runClaudePrompt(
   logDir?: string,
 ): Promise<RunnerResult> {
   return new Promise<RunnerResult>((resolve) => {
-    const child = spawn("claude", ["-p", "--output-format", "stream-json", prompt], {
+    const child = spawn("claude", ["-p", "--verbose", "--output-format", "stream-json", prompt], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,

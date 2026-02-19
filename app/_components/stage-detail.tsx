@@ -90,40 +90,58 @@ function formatLogLine(line: string): string {
     const event = JSON.parse(line) as {
       type?: string;
       subtype?: string;
-      message?: { content?: Array<{ type?: string; text?: string; name?: string }> };
-      cost_usd?: number;
+      hook_name?: string;
+      outcome?: string;
+      model?: string;
+      message?: {
+        model?: string;
+        content?: Array<{ type?: string; text?: string; name?: string }>;
+      };
+      total_cost_usd?: number;
       duration_ms?: number;
+      num_turns?: number;
     };
 
-    if (event.type === "system" && event.subtype === "init") {
-      return "[system] Session initialized";
+    if (event.type === "system") {
+      if (event.subtype === "init") {
+        return `[init] ${event.model ?? "claude"} session started`;
+      }
+      if (event.subtype === "hook_started") {
+        return `[hook] ${event.hook_name ?? "hook"} ...`;
+      }
+      if (event.subtype === "hook_response") {
+        return `[hook] ${event.hook_name ?? "hook"} ${event.outcome ?? "done"}`;
+      }
+      // skip other system events
+      return "";
     }
 
     if (event.type === "result") {
       const status = event.subtype === "success" ? "completed" : "error";
-      const cost = event.cost_usd ? ` ($${event.cost_usd.toFixed(3)})` : "";
+      const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : "";
       const dur = event.duration_ms ? ` ${(event.duration_ms / 1000).toFixed(1)}s` : "";
-      return `[result] ${status}${dur}${cost}`;
+      const turns = event.num_turns ? ` ${event.num_turns} turns` : "";
+      return `[result] ${status}${dur}${turns}${cost}`;
     }
 
     if (event.type === "assistant" && event.message?.content) {
       const parts: string[] = [];
       for (const block of event.message.content) {
         if (block.type === "text" && block.text) {
-          const preview = block.text.length > 120 ? `${block.text.slice(0, 120)}...` : block.text;
+          const preview = block.text.length > 200 ? `${block.text.slice(0, 200)}...` : block.text;
           parts.push(`[text] ${preview}`);
         } else if (block.type === "tool_use" && block.name) {
           parts.push(`[tool] ${block.name}`);
         }
       }
-      return parts.join("\n") || `[assistant] (empty)`;
+      return parts.join("\n") || "";
     }
 
-    if (event.type === "user" && event.message?.content) {
+    if (event.type === "user") {
       return "[tool_result] ...";
     }
 
-    return line;
+    return "";
   } catch {
     return line;
   }
@@ -171,6 +189,7 @@ function LiveOutput({ runId }: { runId: string }) {
         .split("\n")
         .filter((l) => l.trim())
         .map(formatLogLine)
+        .filter((l) => l)
         .join("\n")
     : "Waiting for Claude to start streaming...";
 
