@@ -18,11 +18,11 @@ import { STAGE_ORDER } from "@/lib/harness/types";
 import { provisionWorktree, teardownWorktree } from "@/lib/harness/workspace-manager";
 
 const STAGE_TIMEOUT_MS: Record<StageName, number> = {
-  Plan: 120_000,
-  Implement: 180_000,
-  Verify: 120_000,
-  Test: 300_000,
-  PR: 120_000,
+  Plan: 600_000,
+  Implement: 900_000,
+  Verify: 600_000,
+  Test: 600_000,
+  PR: 600_000,
 };
 
 export interface CreateRunInput {
@@ -288,20 +288,31 @@ export class HarnessOrchestrator {
           return;
         }
 
+        const attemptNumber = next.attempts.length + 1;
+        const attemptDir = path.join(
+          process.cwd(),
+          "runs",
+          run.id,
+          next.name.toLowerCase(),
+          `attempt-${attemptNumber}`,
+        );
+        await mkdir(attemptDir, { recursive: true });
+
+        const prompt = next.promptOverride ?? (await this.buildPrompt(run, next.name));
+        await writeFile(path.join(attemptDir, "prompt.txt"), prompt, "utf8");
+
         const attempt: StageAttempt = {
-          attempt: next.attempts.length + 1,
+          attempt: attemptNumber,
           startedAt: nowIso(),
           endedAt: null,
           status: "running",
-          prompt: "",
+          prompt,
           artifactPath: "",
-          logPath: "",
+          logPath: attemptDir,
           outputPreview: "",
           logsPreview: "",
           error: "",
         };
-        const prompt = next.promptOverride ?? (await this.buildPrompt(run, next.name));
-        attempt.prompt = prompt;
         next.status = "running";
         next.startedAt = nowIso();
         next.endedAt = null;
@@ -317,7 +328,7 @@ export class HarnessOrchestrator {
         });
         await this.store.saveRun(run);
 
-        const result = await this.executeStage(run, next.name, prompt);
+        const result = await this.executeStage(run, next.name, prompt, attemptDir);
         await this.applyStageResult(runId, next.name, result);
         if (!result.success) {
           return;
@@ -396,16 +407,16 @@ export class HarnessOrchestrator {
     ].join("\n");
   }
 
-  private async executeStage(run: RunRecord, stageName: StageName, prompt: string): Promise<RunnerResult> {
+  private async executeStage(run: RunRecord, stageName: StageName, prompt: string, logDir?: string): Promise<RunnerResult> {
     const timeoutMs = STAGE_TIMEOUT_MS[stageName] ?? 120_000;
 
     if (stageName === "Test") {
-      return runTestCommand(run.testCommand, run.repoPath, timeoutMs);
+      return runTestCommand(run.testCommand, run.repoPath, timeoutMs, logDir);
     }
 
     let result: RunnerResult;
     if (run.runnerMode === "claude") {
-      result = await runClaudePrompt(prompt, run.repoPath, timeoutMs);
+      result = await runClaudePrompt(prompt, run.repoPath, timeoutMs, logDir);
     } else {
       result = await runMockStage(stageName, prompt);
     }

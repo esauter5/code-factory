@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Clock, Copy } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +85,126 @@ function CollapsibleSection({
   );
 }
 
+function formatLogLine(line: string): string {
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      subtype?: string;
+      message?: { content?: Array<{ type?: string; text?: string; name?: string }> };
+      cost_usd?: number;
+      duration_ms?: number;
+    };
+
+    if (event.type === "system" && event.subtype === "init") {
+      return "[system] Session initialized";
+    }
+
+    if (event.type === "result") {
+      const status = event.subtype === "success" ? "completed" : "error";
+      const cost = event.cost_usd ? ` ($${event.cost_usd.toFixed(3)})` : "";
+      const dur = event.duration_ms ? ` ${(event.duration_ms / 1000).toFixed(1)}s` : "";
+      return `[result] ${status}${dur}${cost}`;
+    }
+
+    if (event.type === "assistant" && event.message?.content) {
+      const parts: string[] = [];
+      for (const block of event.message.content) {
+        if (block.type === "text" && block.text) {
+          const preview = block.text.length > 120 ? `${block.text.slice(0, 120)}...` : block.text;
+          parts.push(`[text] ${preview}`);
+        } else if (block.type === "tool_use" && block.name) {
+          parts.push(`[tool] ${block.name}`);
+        }
+      }
+      return parts.join("\n") || `[assistant] (empty)`;
+    }
+
+    if (event.type === "user" && event.message?.content) {
+      return "[tool_result] ...";
+    }
+
+    return line;
+  } catch {
+    return line;
+  }
+}
+
+function LiveOutput({ runId }: { runId: string }) {
+  const [content, setContent] = useState("");
+  const [polling, setPolling] = useState(true);
+  const scrollRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (!polling) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/runs/${runId}/logs`);
+        if (res.ok && active) {
+          const data = (await res.json()) as { content: string };
+          setContent(data.content || "");
+        }
+      } catch {
+        // ignore fetch errors
+      }
+    };
+
+    void poll();
+    const interval = setInterval(() => void poll(), 2000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [runId, polling]);
+
+  // Auto-scroll to bottom on new content
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [content]);
+
+  const formatted = content
+    ? content
+        .split("\n")
+        .filter((l) => l.trim())
+        .map(formatLogLine)
+        .join("\n")
+    : "Waiting for output...";
+
+  return (
+    <Collapsible defaultOpen={true}>
+      <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md px-3 py-2 text-xs font-semibold hover:bg-muted transition-colors group">
+        <span className="flex items-center gap-2">
+          Live Output
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--status-running)] opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--status-running)]" />
+          </span>
+        </span>
+        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="relative rounded-md border bg-black/90 mt-1 max-h-[320px] overflow-y-auto">
+          {content && (
+            <div className="sticky top-0 right-0 float-right p-1.5 z-10">
+              <CopyButton text={content} />
+            </div>
+          )}
+          <pre
+            ref={scrollRef}
+            className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed p-3 text-green-400/90"
+          >
+            {formatted}
+          </pre>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function displayDate(value: string | null | undefined): string {
   if (!value) return "-";
   return new Date(value).toLocaleString();
@@ -101,7 +221,7 @@ function elapsed(from: string, to: string | null): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export function StageDetail({ stage }: { stage: StageRun }) {
+export function StageDetail({ stage, runId }: { stage: StageRun; runId: string }) {
   const latest = stage.attempts.at(-1);
 
   return (
@@ -123,6 +243,11 @@ export function StageDetail({ stage }: { stage: StageRun }) {
           </span>
         )}
       </div>
+
+      {/* live output when running */}
+      {stage.status === "running" && (
+        <LiveOutput runId={runId} />
+      )}
 
       {/* content sections */}
       <div className="flex flex-col gap-1.5">

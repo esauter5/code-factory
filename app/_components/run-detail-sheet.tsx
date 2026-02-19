@@ -232,7 +232,7 @@ export function RunDetailSheet({
                 return (
                   <TabsContent key={stage} value={stage} className="px-3 md:px-5 mt-0 pb-4">
                     {stageData ? (
-                      <StageDetail stage={stageData} />
+                      <StageDetail stage={stageData} runId={run.id} />
                     ) : (
                       <p className="text-xs text-muted-foreground py-8 text-center">
                         No data for this stage yet.
