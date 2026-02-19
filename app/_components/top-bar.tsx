@@ -1,6 +1,7 @@
 "use client";
 
-import { FolderGit2, Plus } from "lucide-react";
+import Link from "next/link";
+import { BarChart3, FolderGit2, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -77,6 +78,12 @@ export function TopBar({
           )}
         </div>
 
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" asChild>
+          <Link href="/analytics">
+            <BarChart3 className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Analytics</span>
+          </Link>
+        </Button>
         <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onManageRepos}>
           <FolderGit2 className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Repos</span>
