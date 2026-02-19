@@ -2,17 +2,19 @@
 
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, StageName } from "@/lib/harness/types";
 
 import { RunCard } from "./run-card";
 
 export function BoardColumn({
   stageName,
   runs,
+  repos,
   onCardClick,
 }: {
   stageName: StageName;
   runs: RunRecord[];
+  repos: RepoConfig[];
   onCardClick: (run: RunRecord, stageName: StageName) => void;
 }) {
   return (
@@ -37,6 +39,7 @@ export function BoardColumn({
               <RunCard
                 key={run.id}
                 run={run}
+                repos={repos}
                 onClick={() => onCardClick(run, stageName)}
               />
             ))

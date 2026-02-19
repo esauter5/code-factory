@@ -52,6 +52,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
     async (params: {
       ticket: string;
       repoPath: string;
+      repoId?: string;
       runnerMode: "mock" | "claude";
       testCommand: string;
     }): Promise<RunRecord | null> => {
@@ -149,6 +150,22 @@ export function useRunActions(onSuccess: () => Promise<void>) {
     [onSuccess],
   );
 
+  const cleanWorkspace = useCallback(
+    async (runId: string) => {
+      try {
+        setActionLoading(true);
+        setActionError("");
+        await apiPost<RunResponse>(`/api/runs/${runId}/actions/clean-workspace`, {});
+        await onSuccess();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : "action failed");
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [onSuccess],
+  );
+
   const browseDirectory = useCallback(async (targetPath: string) => {
     const data = await apiGet<DirectoryBrowseResponse>(
       `/api/fs/directories?path=${encodeURIComponent(targetPath)}`,
@@ -165,6 +182,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
     retryFrom,
     editPrompt,
     skipStage,
+    cleanWorkspace,
     browseDirectory,
   };
 }

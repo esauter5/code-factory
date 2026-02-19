@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
+import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { buildRepoContext, latestOutput, loadStageTemplate, renderTemplate } from "@/lib/harness/prompts";
 import { runClaudePrompt, runMockStage, runTestCommand } from "@/lib/harness/runners";
 import { JsonRunStore } from "@/lib/harness/store";
 import type {
+  RepoConfig,
   RunEvent,
   RunRecord,
   RunnerMode,
@@ -14,6 +15,7 @@ import type {
   StageRun,
 } from "@/lib/harness/types";
 import { STAGE_ORDER } from "@/lib/harness/types";
+import { provisionWorktree, teardownWorktree } from "@/lib/harness/workspace-manager";
 
 const STAGE_TIMEOUT_MS: Record<StageName, number> = {
   Plan: 120_000,
@@ -26,6 +28,7 @@ const STAGE_TIMEOUT_MS: Record<StageName, number> = {
 export interface CreateRunInput {
   ticket: string;
   repoPath: string;
+  repoId?: string;
   runnerMode: RunnerMode;
   testCommand: string;
   prMode: "simulate";
@@ -73,11 +76,29 @@ export class HarnessOrchestrator {
   }
 
   async createRun(input: CreateRunInput): Promise<RunRecord> {
-    const repoPath = path.resolve(input.repoPath || ".");
+    const runId = crypto.randomUUID();
+    let repoPath = path.resolve(input.repoPath || ".");
+    let repoId: string | null = null;
+    let worktree: RunRecord["worktree"] = null;
+    let repo: RepoConfig | null = null;
+
+    if (input.repoId) {
+      repo = await this.store.getRepo(input.repoId);
+      if (!repo) {
+        throw new Error("repo not found");
+      }
+      repoId = repo.id;
+      const worktreeInfo = await provisionWorktree(repo, runId);
+      worktree = worktreeInfo;
+      repoPath = worktreeInfo.worktreePath;
+    }
+
     const run: RunRecord = {
-      id: crypto.randomUUID(),
+      id: runId,
       ticket: input.ticket.trim(),
       repoPath,
+      repoId,
+      worktree,
       runnerMode: input.runnerMode,
       testCommand: input.testCommand.trim() || "pnpm lint",
       prMode: "simulate",
@@ -200,6 +221,53 @@ export class HarnessOrchestrator {
     await this.store.saveRun(run);
     await this.startRun(run.id);
     return (await this.requireRun(run.id)) as RunRecord;
+  }
+
+  async cleanWorkspace(runId: string): Promise<RunRecord> {
+    const run = await this.requireRun(runId);
+    if (!run.worktree || !run.repoId) {
+      throw new Error("run has no worktree to clean");
+    }
+    if (run.worktree.status === "cleaned") {
+      throw new Error("worktree already cleaned");
+    }
+    if (this.active.has(runId)) {
+      throw new Error("cannot clean workspace while run is active");
+    }
+    const repo = await this.store.getRepo(run.repoId);
+    if (!repo) {
+      throw new Error("repo not found");
+    }
+    await teardownWorktree(repo, run.worktree);
+    run.worktree.status = "cleaned";
+    run.updatedAt = nowIso();
+    appendEvent(run, {
+      type: "workspace_cleaned",
+      stage: "",
+      message: "Worktree removed",
+    });
+    await this.store.saveRun(run);
+    return run;
+  }
+
+  async listRepos(): Promise<RepoConfig[]> {
+    return this.store.listRepos();
+  }
+
+  async getRepo(repoId: string): Promise<RepoConfig | null> {
+    return this.store.getRepo(repoId);
+  }
+
+  async createRepo(repo: RepoConfig): Promise<RepoConfig> {
+    return this.store.createRepo(repo);
+  }
+
+  async saveRepo(repo: RepoConfig): Promise<RepoConfig> {
+    return this.store.saveRepo(repo);
+  }
+
+  async deleteRepo(repoId: string): Promise<void> {
+    return this.store.deleteRepo(repoId);
   }
 
   private async executeLoop(runId: string): Promise<void> {

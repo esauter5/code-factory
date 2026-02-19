@@ -1,21 +1,58 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { FolderGit2, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { RepoConfig } from "@/lib/harness/types";
+
+const ALL_WORKSPACES = "__all__";
 
 export function TopBar({
   totals,
+  repos,
+  selectedWorkspaceId,
+  onWorkspaceChange,
   onNewRun,
+  onManageRepos,
 }: {
   totals: { total: number; running: number; failed: number; done: number };
+  repos: RepoConfig[];
+  selectedWorkspaceId: string | null;
+  onWorkspaceChange: (workspaceId: string | null) => void;
   onNewRun: () => void;
+  onManageRepos: () => void;
 }) {
   return (
     <header className="flex h-12 items-center justify-between border-b bg-card px-3 md:px-4 shrink-0">
-      <div className="flex items-center">
+      <div className="flex items-center gap-3">
         <h1 className="text-sm font-bold tracking-tight">Code Factory</h1>
+
+        {repos.length > 0 && (
+          <Select
+            value={selectedWorkspaceId ?? ALL_WORKSPACES}
+            onValueChange={(v) => onWorkspaceChange(v === ALL_WORKSPACES ? null : v)}
+          >
+            <SelectTrigger className="h-7 w-[160px] md:w-[200px] text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_WORKSPACES}>All workspaces</SelectItem>
+              {repos.map((repo) => (
+                <SelectItem key={repo.id} value={repo.id}>
+                  {repo.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 md:gap-3">
@@ -40,6 +77,10 @@ export function TopBar({
           )}
         </div>
 
+        <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={onManageRepos}>
+          <FolderGit2 className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Repos</span>
+        </Button>
         <Button size="sm" className="h-7 text-xs gap-1" onClick={onNewRun}>
           <Plus className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">New Run</span>

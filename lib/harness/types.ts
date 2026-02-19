@@ -36,10 +36,31 @@ export interface RunEvent {
   message: string;
 }
 
+export interface RepoConfig {
+  id: string;
+  name: string;
+  localPath: string;
+  gitRemote: string | null;
+  defaultBranch: string;
+  setupScript: string;
+  envFiles: string[];
+  defaultTestCommand: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorktreeInfo {
+  worktreePath: string;
+  branch: string;
+  status: "provisioning" | "ready" | "failed" | "cleaned";
+}
+
 export interface RunRecord {
   id: string;
   ticket: string;
   repoPath: string;
+  repoId: string | null;
+  worktree: WorktreeInfo | null;
   runnerMode: RunnerMode;
   testCommand: string;
   prMode: "simulate";
@@ -54,6 +75,7 @@ export interface RunRecord {
 
 export interface StoreShape {
   runs: RunRecord[];
+  repos: RepoConfig[];
 }
 
 export interface RunnerResult {

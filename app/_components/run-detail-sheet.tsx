@@ -9,6 +9,7 @@ import {
   RotateCcw,
   SkipForward,
   Terminal,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, StageName } from "@/lib/harness/types";
 import { STAGE_ORDER } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
@@ -63,6 +64,7 @@ const statusDot: Record<string, string> = {
 
 export function RunDetailSheet({
   run,
+  repos,
   activeTab,
   onTabChange,
   open,
@@ -71,9 +73,11 @@ export function RunDetailSheet({
   onRetryFrom,
   onEditPrompt,
   onSkipStage,
+  onCleanWorkspace,
   actionLoading,
 }: {
   run: RunRecord | null;
+  repos: RepoConfig[];
   activeTab: StageName;
   onTabChange: (stage: StageName) => void;
   open: boolean;
@@ -82,6 +86,7 @@ export function RunDetailSheet({
   onRetryFrom: (runId: string, stage: StageName) => void;
   onEditPrompt: (runId: string, stage: StageName, prompt: string) => void;
   onSkipStage: (runId: string, stage: StageName, reason: string) => void;
+  onCleanWorkspace: (runId: string) => void;
   actionLoading: boolean;
 }) {
   const [editPromptOpen, setEditPromptOpen] = useState(false);
@@ -97,12 +102,19 @@ export function RunDetailSheet({
     return selectedStage.attempts.at(-1)?.prompt ?? "";
   }, [selectedStage]);
 
+  const repoName = useMemo(() => {
+    if (!run?.repoId) return null;
+    return repos.find((r) => r.id === run.repoId)?.name ?? null;
+  }, [run, repos]);
+
   if (!run) return null;
 
   const isRunning = run.status === "running";
   const stageCount = run.stages.filter(
     (s) => s.status === "done" || s.status === "skipped",
   ).length;
+  const hasActiveWorktree = run.worktree !== null && run.worktree.status === "ready";
+  const canClean = hasActiveWorktree && !isRunning;
 
   return (
     <>
@@ -131,9 +143,17 @@ export function RunDetailSheet({
               <span className="inline-flex items-center gap-1">
                 <GitBranch className="h-3 w-3" />
                 <span className="truncate max-w-[160px] md:max-w-[260px] font-mono" title={run.repoPath}>
-                  {run.repoPath}
+                  {repoName ?? run.repoPath}
                 </span>
               </span>
+              {run.worktree && (
+                <span className="inline-flex items-center gap-1 font-mono">
+                  {run.worktree.branch}
+                  {run.worktree.status === "cleaned" && (
+                    <span className="text-muted-foreground/60">(cleaned)</span>
+                  )}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1">
                 <Terminal className="h-3 w-3" />
                 {run.runnerMode}
@@ -277,6 +297,24 @@ export function RunDetailSheet({
             </Tooltip>
 
             <div className="flex-1" />
+
+            {canClean && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    disabled={actionLoading}
+                    onClick={() => onCleanWorkspace(run.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Clean workspace</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Remove worktree and branch</TooltipContent>
+              </Tooltip>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>

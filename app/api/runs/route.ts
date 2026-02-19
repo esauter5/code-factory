@@ -8,6 +8,7 @@ export const runtime = "nodejs";
 interface CreateRunPayload {
   ticket?: string;
   repoPath?: string;
+  repoId?: string;
   runnerMode?: RunnerMode;
   testCommand?: string;
 }
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const run = await orchestrator.createRun({
     ticket: payload.ticket.trim(),
     repoPath: payload.repoPath?.trim() || ".",
+    repoId: payload.repoId?.trim() || undefined,
     runnerMode: payload.runnerMode ?? "mock",
     testCommand: payload.testCommand?.trim() || "pnpm lint",
     prMode: "simulate",

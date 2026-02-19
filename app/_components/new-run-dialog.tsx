@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FolderOpen } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,22 +22,29 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { RunRecord } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord } from "@/lib/harness/types";
 
 import type { DirectoryBrowseResponse, DirectoryEntry } from "../_hooks/use-run-actions";
+
+const CUSTOM_PATH_VALUE = "__custom__";
 
 export function NewRunDialog({
   open,
   loading,
+  repos,
+  initialRepoId,
   onSubmit,
   onClose,
   onBrowseDirectory,
 }: {
   open: boolean;
   loading: boolean;
+  repos: RepoConfig[];
+  initialRepoId?: string | null;
   onSubmit: (params: {
     ticket: string;
     repoPath: string;
+    repoId?: string;
     runnerMode: "mock" | "claude";
     testCommand: string;
   }) => Promise<RunRecord | null>;
@@ -45,6 +52,7 @@ export function NewRunDialog({
   onBrowseDirectory: (path: string) => Promise<DirectoryBrowseResponse>;
 }) {
   const [ticket, setTicket] = useState("");
+  const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [repoPath, setRepoPath] = useState(".");
   const [runnerMode, setRunnerMode] = useState<"mock" | "claude">("mock");
   const [testCommand, setTestCommand] = useState("pnpm lint");
@@ -56,6 +64,29 @@ export function NewRunDialog({
   const [pickerParentPath, setPickerParentPath] = useState<string | null>(null);
   const [pickerDirectories, setPickerDirectories] = useState<DirectoryEntry[]>([]);
   const [pickerShortcuts, setPickerShortcuts] = useState<Array<{ label: string; path: string }>>([]);
+
+  // Pre-select repo from active workspace when dialog opens
+  useEffect(() => {
+    if (open && initialRepoId) {
+      setSelectedRepoId(initialRepoId);
+      const repo = repos.find((r) => r.id === initialRepoId);
+      if (repo) {
+        setTestCommand(repo.defaultTestCommand || "pnpm lint");
+      }
+    }
+  }, [open, initialRepoId, repos]);
+
+  const isCustomPath = selectedRepoId === CUSTOM_PATH_VALUE;
+
+  const handleRepoChange = (value: string) => {
+    setSelectedRepoId(value);
+    if (value !== CUSTOM_PATH_VALUE) {
+      const repo = repos.find((r) => r.id === value);
+      if (repo) {
+        setTestCommand(repo.defaultTestCommand || "pnpm lint");
+      }
+    }
+  };
 
   const loadDirectory = useCallback(
     async (targetPath: string) => {
@@ -87,9 +118,29 @@ export function NewRunDialog({
   };
 
   const handleSubmit = async () => {
-    const result = await onSubmit({ ticket, repoPath, runnerMode, testCommand });
+    const params: {
+      ticket: string;
+      repoPath: string;
+      repoId?: string;
+      runnerMode: "mock" | "claude";
+      testCommand: string;
+    } = {
+      ticket,
+      repoPath: isCustomPath ? repoPath : ".",
+      runnerMode,
+      testCommand,
+    };
+
+    if (selectedRepoId && !isCustomPath) {
+      params.repoId = selectedRepoId;
+    }
+
+    const result = await onSubmit(params);
     if (result) {
       setTicket("");
+      setSelectedRepoId("");
+      setRepoPath(".");
+      setTestCommand("pnpm lint");
       onClose();
     }
   };
@@ -218,26 +269,68 @@ export function NewRunDialog({
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium" htmlFor="repoPath">
-                Repo Path
+              <label className="text-xs font-medium" htmlFor="repoSelect">
+                Repository
               </label>
-              <div className="flex gap-2">
-                <Input
-                  id="repoPath"
-                  className="text-sm font-mono"
-                  value={repoPath}
-                  onChange={(e) => setRepoPath(e.target.value)}
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0 gap-1"
-                  onClick={openPicker}
-                >
-                  <FolderOpen className="h-3.5 w-3.5" />
-                  Browse
-                </Button>
-              </div>
+              {repos.length > 0 ? (
+                <>
+                  <Select value={selectedRepoId} onValueChange={handleRepoChange}>
+                    <SelectTrigger id="repoSelect" className="text-sm">
+                      <SelectValue placeholder="Select a repo..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {repos.map((repo) => (
+                        <SelectItem key={repo.id} value={repo.id}>
+                          <span className="font-medium">{repo.name}</span>
+                          <span className="ml-2 text-muted-foreground text-[11px] font-mono">
+                            {repo.localPath}
+                          </span>
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={CUSTOM_PATH_VALUE}>
+                        Custom path...
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {isCustomPath && (
+                    <div className="flex gap-2 mt-1">
+                      <Input
+                        className="text-sm font-mono"
+                        placeholder="/path/to/repo"
+                        value={repoPath}
+                        onChange={(e) => setRepoPath(e.target.value)}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 gap-1"
+                        onClick={openPicker}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                        Browse
+                      </Button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="flex gap-2">
+                  <Input
+                    id="repoSelect"
+                    className="text-sm font-mono"
+                    value={repoPath}
+                    onChange={(e) => setRepoPath(e.target.value)}
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0 gap-1"
+                    onClick={openPicker}
+                  >
+                    <FolderOpen className="h-3.5 w-3.5" />
+                    Browse
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

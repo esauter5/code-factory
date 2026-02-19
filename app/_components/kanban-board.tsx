@@ -4,7 +4,7 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, StageName } from "@/lib/harness/types";
 import { STAGE_ORDER } from "@/lib/harness/types";
 
 import { BoardColumn } from "./board-column";
@@ -12,9 +12,11 @@ import { RunCard } from "./run-card";
 
 export function KanbanBoard({
   boardColumns,
+  repos,
   onCardClick,
 }: {
   boardColumns: Record<StageName, RunRecord[]>;
+  repos: RepoConfig[];
   onCardClick: (run: RunRecord, stageName: StageName) => void;
 }) {
   const [mobileTab, setMobileTab] = useState<StageName>("Plan");
@@ -28,6 +30,7 @@ export function KanbanBoard({
             key={stageName}
             stageName={stageName}
             runs={boardColumns[stageName]}
+            repos={repos}
             onCardClick={onCardClick}
           />
         ))}
@@ -73,6 +76,7 @@ export function KanbanBoard({
                     <RunCard
                       key={run.id}
                       run={run}
+                      repos={repos}
                       onClick={() => onCardClick(run, stage)}
                     />
                   ))}

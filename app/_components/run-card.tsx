@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { RunRecord, RunStatus } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, RunStatus } from "@/lib/harness/types";
 import { STAGE_ORDER } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
@@ -33,11 +33,16 @@ function shortText(value: string, limit = 72): string {
 
 export function RunCard({
   run,
+  repos,
   onClick,
 }: {
   run: RunRecord;
+  repos: RepoConfig[];
   onClick: () => void;
 }) {
+  const repoName = run.repoId
+    ? repos.find((r) => r.id === run.repoId)?.name ?? null
+    : null;
   const stageProgress = STAGE_ORDER.map((name) => {
     const stage = run.stages.find((s) => s.name === name);
     if (!stage) return "queued" as const;
@@ -62,6 +67,12 @@ export function RunCard({
       <p className="text-sm font-medium leading-snug line-clamp-2 mb-1.5">
         {shortText(run.ticket)}
       </p>
+
+      {repoName && (
+        <p className="text-[10px] text-muted-foreground mb-1 truncate font-mono" title={run.repoPath}>
+          {repoName}
+        </p>
+      )}
 
       <div className="flex items-center justify-between gap-2">
         <code className="text-[10px] text-muted-foreground font-mono">{run.id.slice(0, 8)}</code>

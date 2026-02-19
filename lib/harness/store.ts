@@ -1,10 +1,10 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { RunRecord, StoreShape } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, StoreShape } from "@/lib/harness/types";
 
 function defaultData(): StoreShape {
-  return { runs: [] };
+  return { runs: [], repos: [] };
 }
 
 export class JsonRunStore {
@@ -45,6 +45,9 @@ export class JsonRunStore {
       const parsed = JSON.parse(raw) as StoreShape;
       if (!Array.isArray(parsed.runs)) {
         return defaultData();
+      }
+      if (!Array.isArray(parsed.repos)) {
+        parsed.repos = [];
       }
       return parsed;
     } catch {
@@ -98,6 +101,52 @@ export class JsonRunStore {
       }
       await this.writeData(data);
       return structuredClone(run);
+    });
+  }
+
+  async listRepos(): Promise<RepoConfig[]> {
+    return this.withLock(async () => {
+      const data = await this.readData();
+      return structuredClone(data.repos);
+    });
+  }
+
+  async getRepo(repoId: string): Promise<RepoConfig | null> {
+    return this.withLock(async () => {
+      const data = await this.readData();
+      const found = data.repos.find((repo) => repo.id === repoId);
+      return found ? structuredClone(found) : null;
+    });
+  }
+
+  async createRepo(repo: RepoConfig): Promise<RepoConfig> {
+    return this.withLock(async () => {
+      const data = await this.readData();
+      data.repos.push(structuredClone(repo));
+      await this.writeData(data);
+      return structuredClone(repo);
+    });
+  }
+
+  async saveRepo(repo: RepoConfig): Promise<RepoConfig> {
+    return this.withLock(async () => {
+      const data = await this.readData();
+      const idx = data.repos.findIndex((item) => item.id === repo.id);
+      if (idx === -1) {
+        data.repos.push(structuredClone(repo));
+      } else {
+        data.repos[idx] = structuredClone(repo);
+      }
+      await this.writeData(data);
+      return structuredClone(repo);
+    });
+  }
+
+  async deleteRepo(repoId: string): Promise<void> {
+    return this.withLock(async () => {
+      const data = await this.readData();
+      data.repos = data.repos.filter((repo) => repo.id !== repoId);
+      await this.writeData(data);
     });
   }
 }
