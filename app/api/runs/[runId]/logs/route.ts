@@ -12,7 +12,7 @@ interface RouteParams {
   params: Promise<{ runId: string }>;
 }
 
-export async function GET(_request: Request, { params }: RouteParams): Promise<NextResponse> {
+export async function GET(request: Request, { params }: RouteParams): Promise<NextResponse> {
   const { runId } = await params;
   const orchestrator = getOrchestrator();
   const run = await orchestrator.getRun(runId);
@@ -20,18 +20,32 @@ export async function GET(_request: Request, { params }: RouteParams): Promise<N
     return NextResponse.json({ error: "run not found" }, { status: 404 });
   }
 
-  // Find the running stage and its latest attempt
-  const runningStage = run.stages.find((s) => s.status === "running");
-  if (!runningStage) {
+  const url = new URL(request.url);
+  const stageName = url.searchParams.get("stage");
+
+  // If a specific stage is requested, read its logs
+  // Otherwise fall back to the currently running stage
+  const targetStage = stageName
+    ? run.stages.find((s) => s.name === stageName)
+    : run.stages.find((s) => s.status === "running");
+
+  if (!targetStage) {
     return NextResponse.json({ content: "", stage: null, attempt: null });
   }
 
-  const latestAttempt = runningStage.attempts.at(-1);
+  const latestAttempt = targetStage.attempts.at(-1);
   if (!latestAttempt?.logPath) {
-    return NextResponse.json({ content: "", stage: runningStage.name, attempt: latestAttempt?.attempt ?? null });
+    return NextResponse.json({ content: "", stage: targetStage.name, attempt: latestAttempt?.attempt ?? null });
   }
 
-  const logFile = path.join(latestAttempt.logPath, "live.log");
+  // logPath is the attempt directory during execution, but gets
+  // overwritten to logs.txt path after completion. Handle both.
+  let logDir = latestAttempt.logPath;
+  if (logDir.endsWith(".txt")) {
+    logDir = path.dirname(logDir);
+  }
+
+  const logFile = path.join(logDir, "live.log");
   let content = "";
   try {
     const raw = await readFile(logFile, "utf8");
@@ -48,7 +62,7 @@ export async function GET(_request: Request, { params }: RouteParams): Promise<N
 
   return NextResponse.json({
     content,
-    stage: runningStage.name,
+    stage: targetStage.name,
     attempt: latestAttempt.attempt,
   });
 }

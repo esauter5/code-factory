@@ -147,21 +147,21 @@ function formatLogLine(line: string): string {
   }
 }
 
-function LiveOutput({ runId }: { runId: string }) {
+function LiveOutput({ runId, stageName, active }: { runId: string; stageName: string; active: boolean }) {
   const [content, setContent] = useState("");
-  const [polling, setPolling] = useState(true);
   const scrollRef = useRef<HTMLPreElement>(null);
+  const hasFetchedOnce = useRef(false);
 
   useEffect(() => {
-    if (!polling) return;
+    let cancelled = false;
 
-    let active = true;
     const poll = async () => {
       try {
-        const res = await fetch(`/api/runs/${runId}/logs`);
-        if (res.ok && active) {
+        const res = await fetch(`/api/runs/${runId}/logs?stage=${stageName}`);
+        if (res.ok && !cancelled) {
           const data = (await res.json()) as { content: string };
           setContent(data.content || "");
+          hasFetchedOnce.current = true;
         }
       } catch {
         // ignore fetch errors
@@ -169,20 +169,25 @@ function LiveOutput({ runId }: { runId: string }) {
     };
 
     void poll();
-    const interval = setInterval(() => void poll(), 2000);
+
+    // Only poll repeatedly while the stage is actively running
+    let interval: ReturnType<typeof setInterval> | undefined;
+    if (active) {
+      interval = setInterval(() => void poll(), 2000);
+    }
 
     return () => {
-      active = false;
-      clearInterval(interval);
+      cancelled = true;
+      if (interval) clearInterval(interval);
     };
-  }, [runId, polling]);
+  }, [runId, stageName, active]);
 
-  // Auto-scroll to bottom on new content
+  // Auto-scroll to bottom on new content while active
   useEffect(() => {
-    if (scrollRef.current) {
+    if (active && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [content]);
+  }, [content, active]);
 
   const formatted = content
     ? content
@@ -191,17 +196,24 @@ function LiveOutput({ runId }: { runId: string }) {
         .map(formatLogLine)
         .filter((l) => l)
         .join("\n")
-    : "Waiting for Claude to start streaming...";
+    : active
+      ? "Waiting for Claude to start streaming..."
+      : "";
+
+  // Don't render if completed with no log content
+  if (!active && !content) return null;
 
   return (
-    <Collapsible defaultOpen={true}>
+    <Collapsible defaultOpen={active}>
       <CollapsibleTrigger className="flex w-full items-center justify-between rounded-md px-3 py-2 text-xs font-semibold hover:bg-muted transition-colors group">
         <span className="flex items-center gap-2">
-          Live Output
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--status-running)] opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--status-running)]" />
-          </span>
+          {active ? "Live Output" : "Stream Log"}
+          {active && (
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--status-running)] opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--status-running)]" />
+            </span>
+          )}
         </span>
         <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
       </CollapsibleTrigger>
@@ -214,7 +226,10 @@ function LiveOutput({ runId }: { runId: string }) {
           )}
           <pre
             ref={scrollRef}
-            className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed p-3 text-green-400/90"
+            className={cn(
+              "text-xs whitespace-pre-wrap break-words font-mono leading-relaxed p-3",
+              active ? "text-green-400/90" : "text-green-400/60",
+            )}
           >
             {formatted}
           </pre>
@@ -263,9 +278,9 @@ export function StageDetail({ stage, runId }: { stage: StageRun; runId: string }
         )}
       </div>
 
-      {/* live output when running */}
-      {stage.status === "running" && (
-        <LiveOutput runId={runId} />
+      {/* stream log — live when running, static when complete */}
+      {stage.attempts.length > 0 && (
+        <LiveOutput runId={runId} stageName={stage.name} active={stage.status === "running"} />
       )}
 
       {/* content sections */}
