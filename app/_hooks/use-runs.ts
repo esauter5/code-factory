@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { RunRecord } from "@/lib/harness/types";
 
 interface RunsResponse {
   runs: RunRecord[];
@@ -10,14 +10,16 @@ interface RunsResponse {
 
 const POLL_MS = 1800;
 
-function getBoardStage(run: RunRecord): StageName {
+function getBoardStage(run: RunRecord): string {
   const running = run.stages.find((stage) => stage.status === "running");
   if (running) return running.name;
   const failed = run.stages.find((stage) => stage.status === "failed");
   if (failed) return failed.name;
   const queued = run.stages.find((stage) => stage.status === "queued");
   if (queued) return queued.name;
-  return "PR";
+  // Completed: return last stage name
+  const last = run.stages[run.stages.length - 1];
+  return last?.name ?? "Plan";
 }
 
 export { getBoardStage };
@@ -77,32 +79,5 @@ export function useRuns() {
     };
   }, []);
 
-  const boardColumns = useMemo(() => {
-    const columns: Record<StageName, RunRecord[]> = {
-      Plan: [],
-      Implement: [],
-      Verify: [],
-      Test: [],
-      PR: [],
-    };
-    for (const run of runs) {
-      columns[getBoardStage(run)].push(run);
-    }
-    for (const key of Object.keys(columns) as StageName[]) {
-      columns[key].sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
-    }
-    return columns;
-  }, [runs]);
-
-  const totals = useMemo(
-    () => ({
-      total: runs.length,
-      running: runs.filter((r) => r.status === "running").length,
-      failed: runs.filter((r) => r.status === "failed").length,
-      done: runs.filter((r) => r.status === "done").length,
-    }),
-    [runs],
-  );
-
-  return { runs, boardColumns, totals, loading, error, setError, clearError, refresh };
+  return { runs, loading, error, setError, clearError, refresh };
 }

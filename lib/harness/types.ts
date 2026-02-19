@@ -1,7 +1,12 @@
-export const STAGE_ORDER = ["Plan", "Implement", "Verify", "Test", "PR"] as const;
+import type { StageDefinition } from "@/lib/harness/pipeline-templates";
 
-export type StageName = (typeof STAGE_ORDER)[number];
-export type RunnerMode = "mock" | "claude";
+export const DEFAULT_STAGE_ORDER = ["Plan", "Implement", "Verify", "Test", "PR"] as const;
+/** @deprecated Use DEFAULT_STAGE_ORDER instead */
+export const STAGE_ORDER = DEFAULT_STAGE_ORDER;
+
+export type StageName = string;
+export type RunnerMode = "mock" | "claude" | "codex" | "gemini";
+export type PrMode = "simulate" | "create";
 export type RunStatus = "queued" | "running" | "failed" | "done";
 export type StageStatus = "queued" | "running" | "failed" | "done" | "skipped";
 
@@ -19,7 +24,7 @@ export interface StageAttempt {
 }
 
 export interface StageRun {
-  name: StageName;
+  name: string;
   status: StageStatus;
   attempts: StageAttempt[];
   lastError: string;
@@ -32,7 +37,7 @@ export interface StageRun {
 export interface RunEvent {
   timestamp: string;
   type: string;
-  stage: StageName | "";
+  stage: string;
   message: string;
 }
 
@@ -63,14 +68,19 @@ export interface RunRecord {
   worktree: WorktreeInfo | null;
   runnerMode: RunnerMode;
   testCommand: string;
-  prMode: "simulate";
+  prMode: PrMode;
+  prUrl: string | null;
   status: RunStatus;
-  currentStage: StageName | null;
+  currentStage: string | null;
   createdAt: string;
   updatedAt: string;
   repoContext: string;
   stages: StageRun[];
   events: RunEvent[];
+  templateId: string | null;
+  templateSnapshot: StageDefinition[] | null;
+  model: string | null;
+  thinkingLevel: string | null;
 }
 
 export interface StoreShape {
@@ -83,4 +93,25 @@ export interface RunnerResult {
   output: string;
   logs: string;
   error: string;
+}
+
+export interface StageOverride {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+  timeoutMs?: number;
+}
+
+export type StageOverrides = Record<string, StageOverride>;
+
+export interface ProviderData {
+  id: string;
+  label: string;
+  available: boolean;
+  defaultModel: string;
+  models: {
+    id: string;
+    label: string;
+    thinkingLevels: { id: string; label: string }[];
+  }[];
 }

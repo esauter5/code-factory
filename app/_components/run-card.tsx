@@ -2,7 +2,6 @@
 
 import { Badge } from "@/components/ui/badge";
 import type { RepoConfig, RunRecord, RunStatus } from "@/lib/harness/types";
-import { STAGE_ORDER } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
 import { StatusBadge } from "./status-badge";
@@ -43,11 +42,6 @@ export function RunCard({
   const repoName = run.repoId
     ? repos.find((r) => r.id === run.repoId)?.name ?? null
     : null;
-  const stageProgress = STAGE_ORDER.map((name) => {
-    const stage = run.stages.find((s) => s.name === name);
-    if (!stage) return "queued" as const;
-    return stage.status;
-  });
 
   return (
     <button
@@ -78,19 +72,19 @@ export function RunCard({
         <code className="text-[10px] text-muted-foreground font-mono">{run.id.slice(0, 8)}</code>
         <div className="flex items-center gap-1">
           <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-            {run.runnerMode}
+            {run.runnerMode}{run.model ? ` / ${run.model}` : ""}
           </Badge>
           <div className="flex gap-0.5 ml-1">
-            {stageProgress.map((status, i) => (
+            {run.stages.map((stage) => (
               <span
-                key={STAGE_ORDER[i]}
+                key={stage.name}
                 className={cn(
                   "block h-1.5 w-1.5 rounded-full",
-                  status === "done" || status === "skipped"
+                  stage.status === "done" || stage.status === "skipped"
                     ? "bg-[var(--status-done)]"
-                    : status === "running"
+                    : stage.status === "running"
                       ? "bg-[var(--status-running)] animate-pulse"
-                      : status === "failed"
+                      : stage.status === "failed"
                         ? "bg-[var(--status-failed)]"
                         : "bg-muted-foreground/25",
                 )}

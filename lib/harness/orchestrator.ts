@@ -1,29 +1,24 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { StageDefinition } from "@/lib/harness/pipeline-templates";
+import { getTemplateOrDefault } from "@/lib/harness/pipeline-templates";
 import { buildRepoContext, latestOutput, loadStageTemplate, renderTemplate } from "@/lib/harness/prompts";
-import { runClaudePrompt, runMockStage, runTestCommand } from "@/lib/harness/runners";
+import { getProvider } from "@/lib/harness/providers";
+import { runMockStage, runProviderPrompt, runTestCommand } from "@/lib/harness/runners";
 import { JsonRunStore } from "@/lib/harness/store";
 import type {
+  PrMode,
   RepoConfig,
   RunEvent,
   RunRecord,
   RunnerMode,
   RunnerResult,
   StageAttempt,
-  StageName,
+  StageOverrides,
   StageRun,
 } from "@/lib/harness/types";
-import { STAGE_ORDER } from "@/lib/harness/types";
 import { provisionWorktree, teardownWorktree } from "@/lib/harness/workspace-manager";
-
-const STAGE_TIMEOUT_MS: Record<StageName, number> = {
-  Plan: 600_000,
-  Implement: 900_000,
-  Verify: 600_000,
-  Test: 600_000,
-  PR: 600_000,
-};
 
 export interface CreateRunInput {
   ticket: string;
@@ -31,14 +26,18 @@ export interface CreateRunInput {
   repoId?: string;
   runnerMode: RunnerMode;
   testCommand: string;
-  prMode: "simulate";
+  prMode: PrMode;
+  templateId?: string;
+  model?: string;
+  thinkingLevel?: string;
+  stageOverrides?: StageOverrides;
 }
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function stageDefault(name: StageName): StageRun {
+function stageDefault(name: string): StageRun {
   return {
     name,
     status: "queued",
@@ -93,6 +92,21 @@ export class HarnessOrchestrator {
       repoPath = worktreeInfo.worktreePath;
     }
 
+    const template = getTemplateOrDefault(input.templateId);
+
+    // Merge per-stage overrides into template stages before snapshotting
+    const mergedStages = template.stages.map((def) => {
+      const ov = input.stageOverrides?.[def.name];
+      if (!ov) return def;
+      return {
+        ...def,
+        ...(ov.provider ? { provider: ov.provider } : {}),
+        ...(ov.model ? { model: ov.model } : {}),
+        ...(ov.thinkingLevel ? { thinkingLevel: ov.thinkingLevel } : {}),
+        ...(ov.timeoutMs ? { timeoutMs: ov.timeoutMs } : {}),
+      };
+    });
+
     const run: RunRecord = {
       id: runId,
       ticket: input.ticket.trim(),
@@ -101,14 +115,19 @@ export class HarnessOrchestrator {
       worktree,
       runnerMode: input.runnerMode,
       testCommand: input.testCommand.trim() || "pnpm lint",
-      prMode: "simulate",
+      prMode: input.prMode,
+      prUrl: null,
       status: "queued",
       currentStage: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       repoContext: await buildRepoContext(repoPath),
-      stages: STAGE_ORDER.map((name) => stageDefault(name)),
+      stages: mergedStages.map((def) => stageDefault(def.name)),
       events: [],
+      templateId: template.id,
+      templateSnapshot: mergedStages,
+      model: input.model ?? null,
+      thinkingLevel: input.thinkingLevel ?? null,
     };
     appendEvent(run, {
       type: "run_created",
@@ -142,16 +161,16 @@ export class HarnessOrchestrator {
     return existing;
   }
 
-  async retryStage(runId: string, stageName: StageName): Promise<RunRecord> {
+  async retryStage(runId: string, stageName: string): Promise<RunRecord> {
     return this.retryFrom(runId, stageName);
   }
 
-  async retryFrom(runId: string, stageName: StageName): Promise<RunRecord> {
+  async retryFrom(runId: string, stageName: string): Promise<RunRecord> {
     if (this.active.has(runId)) {
       throw new Error("run is currently active");
     }
     const run = await this.requireRun(runId);
-    const startIdx = STAGE_ORDER.findIndex((name) => name === stageName);
+    const startIdx = run.stages.findIndex((s) => s.name === stageName);
     if (startIdx === -1) {
       throw new Error("invalid stage");
     }
@@ -175,7 +194,7 @@ export class HarnessOrchestrator {
     return (await this.requireRun(runId)) as RunRecord;
   }
 
-  async editPromptAndRerun(runId: string, stageName: StageName, prompt: string): Promise<RunRecord> {
+  async editPromptAndRerun(runId: string, stageName: string, prompt: string): Promise<RunRecord> {
     if (this.active.has(runId)) {
       throw new Error("run is currently active");
     }
@@ -194,7 +213,7 @@ export class HarnessOrchestrator {
     return this.retryFrom(runId, stageName);
   }
 
-  async skipStage(runId: string, stageName: StageName, reason: string): Promise<RunRecord> {
+  async skipStage(runId: string, stageName: string, reason: string): Promise<RunRecord> {
     if (this.active.has(runId)) {
       throw new Error("run is currently active");
     }
@@ -270,6 +289,18 @@ export class HarnessOrchestrator {
     return this.store.deleteRepo(repoId);
   }
 
+  private getStageDefinitions(run: RunRecord): StageDefinition[] {
+    if (run.templateSnapshot) {
+      return run.templateSnapshot;
+    }
+    // Legacy fallback: feature template
+    return getTemplateOrDefault("feature").stages;
+  }
+
+  private getStageDefinition(run: RunRecord, stageName: string): StageDefinition | undefined {
+    return this.getStageDefinitions(run).find((d) => d.name === stageName);
+  }
+
   private async executeLoop(runId: string): Promise<void> {
     try {
       while (true) {
@@ -339,25 +370,73 @@ export class HarnessOrchestrator {
     }
   }
 
-  private async buildPrompt(run: RunRecord, stageName: StageName): Promise<string> {
-    const template = await loadStageTemplate(stageName);
-    return renderTemplate(template, {
+  private async buildPrompt(run: RunRecord, stageName: string): Promise<string> {
+    const stageDef = this.getStageDefinition(run, stageName);
+    const templateName = stageDef?.templateOrCommand ?? stageName.toLowerCase();
+    const template = await loadStageTemplate(templateName);
+
+    // Build dynamic variable map from all prior stages
+    const vars: Record<string, string> = {
       run_id: run.id,
       ticket: run.ticket,
       repo_path: run.repoPath,
       repo_context: run.repoContext,
       progress_path: this.progressPath(run.id),
-      plan_artifact: latestOutput(run, "Plan"),
-      implementation_artifact: latestOutput(run, "Implement"),
-      verify_artifact: latestOutput(run, "Verify"),
-      test_report: latestOutput(run, "Test"),
       feedback: this.buildFeedback(run, stageName),
-    });
+      pr_instructions: this.buildPrInstructions(run),
+    };
+
+    // Inject outputs from all prior stages as {{<name_lowercase>_artifact}}
+    for (const stage of run.stages) {
+      if (stage.name === stageName) break;
+      const key = `${stage.name.toLowerCase()}_artifact`;
+      vars[key] = latestOutput(run, stage.name);
+    }
+
+    // Legacy aliases for backward compat with existing prompt templates
+    vars.plan_artifact = latestOutput(run, "Plan");
+    vars.implementation_artifact = latestOutput(run, "Implement");
+    vars.verify_artifact = latestOutput(run, "Verify");
+    vars.test_report = latestOutput(run, "Test");
+
+    return renderTemplate(template, vars);
   }
 
-  private buildFeedback(run: RunRecord, stageName: StageName): string {
+  private buildPrInstructions(run: RunRecord): string {
+    if (run.prMode === "create") {
+      const branch = run.worktree?.branch ?? "unknown-branch";
+      const baseBranch = "main";
+      return [
+        "## PR Creation Instructions",
+        "",
+        "You MUST create a real GitHub pull request. Follow these steps exactly:",
+        "",
+        "1. Stage and commit all changes:",
+        '   git add -A && git commit -m "<concise commit message summarizing the changes>"',
+        "",
+        `2. Push the branch to the remote:`,
+        `   git push -u origin ${branch}`,
+        "",
+        `3. Create the PR using the GitHub CLI:`,
+        `   gh pr create --base ${baseBranch} --head ${branch} --title "<PR title>" --body "<PR body with summary>"`,
+        "",
+        "4. Output the PR URL returned by gh pr create. The URL must appear in your output.",
+        "",
+        "IMPORTANT: Do NOT just write a draft. Actually run the git and gh commands above.",
+        "After the PR is created, include the PR URL on its own line in your output.",
+      ].join("\n");
+    }
+
+    return [
+      "Write a concise PR draft including title and summary.",
+      "",
+      'After the PR draft, include a section titled "## Suggested CLAUDE.md Updates" listing any new files, patterns, conventions, or architectural decisions introduced by this change that would be useful for future agents working on this codebase. If nothing notable was introduced, write "No updates suggested."',
+    ].join("\n");
+  }
+
+  private buildFeedback(run: RunRecord, stageName: string): string {
     const lines: string[] = [];
-    const stageIdx = STAGE_ORDER.indexOf(stageName);
+    const stageIdx = run.stages.findIndex((s) => s.name === stageName);
     const stage = run.stages.find((s) => s.name === stageName);
 
     // Same-stage: prior failed attempts of THIS stage
@@ -376,14 +455,13 @@ export class HarnessOrchestrator {
     }
 
     // Cross-stage: downstream stage failures
-    for (let i = stageIdx + 1; i < STAGE_ORDER.length; i += 1) {
-      const downstreamName = STAGE_ORDER[i];
-      const downstream = run.stages.find((s) => s.name === downstreamName);
+    for (let i = stageIdx + 1; i < run.stages.length; i += 1) {
+      const downstream = run.stages[i];
       if (!downstream || downstream.attempts.length === 0) continue;
       const lastAttempt = downstream.attempts[downstream.attempts.length - 1];
       if (lastAttempt.status !== "failed") continue;
 
-      lines.push(`### ${downstreamName} stage feedback (failed)`);
+      lines.push(`### ${downstream.name} stage feedback (failed)`);
       if (lastAttempt.error) {
         lines.push(`Error: ${lastAttempt.error}`);
       }
@@ -407,37 +485,68 @@ export class HarnessOrchestrator {
     ].join("\n");
   }
 
-  private async executeStage(run: RunRecord, stageName: StageName, prompt: string, logDir?: string): Promise<RunnerResult> {
-    const timeoutMs = STAGE_TIMEOUT_MS[stageName] ?? 120_000;
+  private async executeStage(run: RunRecord, stageName: string, prompt: string, logDir?: string): Promise<RunnerResult> {
+    const stageDef = this.getStageDefinition(run, stageName);
+    const timeoutMs = stageDef?.timeoutMs ?? 120_000;
 
-    if (stageName === "Test") {
-      return runTestCommand(run.testCommand, run.repoPath, timeoutMs, logDir);
+    // Shell-command execution (e.g. Test stage)
+    if (stageDef?.executionType === "shell-command") {
+      const command = stageDef.templateOrCommand === "$testCommand"
+        ? run.testCommand
+        : stageDef.templateOrCommand;
+      return runTestCommand(command, run.repoPath, timeoutMs, logDir);
     }
 
+    // Resolve provider/model/thinking with per-stage overrides
+    const providerId = stageDef?.provider ?? run.runnerMode;
+    const model = stageDef?.model ?? run.model ?? undefined;
+    const thinkingLevel = stageDef?.thinkingLevel ?? run.thinkingLevel ?? undefined;
+
+    // Mock or provider-based execution
     let result: RunnerResult;
-    if (run.runnerMode === "claude") {
-      result = await runClaudePrompt(prompt, run.repoPath, timeoutMs, logDir);
+    if (providerId === "mock") {
+      result = await runMockStage(stageDef ?? { name: stageName, executionType: "claude-prompt", templateOrCommand: stageName.toLowerCase(), timeoutMs }, prompt);
     } else {
-      result = await runMockStage(stageName, prompt);
+      const provider = getProvider(providerId);
+      if (!provider) {
+        return { success: false, output: "", logs: "", error: `Unknown provider: ${providerId}` };
+      }
+      result = await runProviderPrompt(provider, prompt, run.repoPath, timeoutMs, model, thinkingLevel, logDir);
     }
 
-    if (stageName === "Verify" && result.success && result.output.toUpperCase().includes("BLOCKER:")) {
-      return {
-        success: false,
-        output: result.output,
-        logs: result.logs,
-        error: "Verify found blocker findings",
-      };
-    }
+    // Apply success criteria generically
+    if (stageDef?.successCriteria) {
+      const { failIfOutputContains, extractUrlPattern } = stageDef.successCriteria;
 
-    if (stageName === "PR" && result.success && run.prMode === "simulate") {
-      const suffix = run.id.split("-")[0];
-      return {
-        success: true,
-        output: `${result.output}\n\nsimulated_pr_url: https://example.com/pr/${suffix}`,
-        logs: result.logs,
-        error: "",
-      };
+      // failIfOutputContains check
+      if (failIfOutputContains && result.success && result.output.toUpperCase().includes(failIfOutputContains.toUpperCase())) {
+        return {
+          success: false,
+          output: result.output,
+          logs: result.logs,
+          error: `${stageName} found blocker findings`,
+        };
+      }
+
+      // extractUrlPattern check (e.g. PR URL extraction)
+      if (extractUrlPattern && result.success) {
+        if (run.prMode === "create") {
+          const urlMatch = result.output.match(new RegExp(extractUrlPattern));
+          if (urlMatch) {
+            run.prUrl = urlMatch[0];
+            await this.store.saveRun(run);
+          }
+          return result;
+        }
+        // Simulated PR URL fallback
+        const suffix = run.id.split("-")[0];
+        return {
+          success: true,
+          output: `${result.output}\n\nsimulated_pr_url: https://example.com/pr/${suffix}`,
+          logs: result.logs,
+          error: "",
+        };
+      }
     }
 
     return result;
@@ -445,7 +554,7 @@ export class HarnessOrchestrator {
 
   private async applyStageResult(
     runId: string,
-    stageName: StageName,
+    stageName: string,
     result: RunnerResult,
   ): Promise<void> {
     const run = await this.requireRun(runId);
@@ -503,7 +612,7 @@ export class HarnessOrchestrator {
 
   private async persistAttemptFiles(
     runId: string,
-    stageName: StageName,
+    stageName: string,
     attemptNumber: number,
     prompt: string,
     output: string,
@@ -528,7 +637,7 @@ export class HarnessOrchestrator {
 
   private async appendProgress(
     runId: string,
-    stageName: StageName,
+    stageName: string,
     attemptNumber: number,
     result: RunnerResult,
   ): Promise<void> {

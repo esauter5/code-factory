@@ -22,7 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import type { RepoConfig, RunRecord } from "@/lib/harness/types";
+import { BUILTIN_TEMPLATES, DEFAULT_TEMPLATE_ID } from "@/lib/harness/pipeline-templates";
+import type { PrMode, ProviderData, RepoConfig, RunRecord, RunnerMode } from "@/lib/harness/types";
 
 import type { DirectoryBrowseResponse, DirectoryEntry } from "../_hooks/use-run-actions";
 
@@ -36,6 +37,7 @@ export function NewRunDialog({
   onSubmit,
   onClose,
   onBrowseDirectory,
+  onRunnerModeChange,
 }: {
   open: boolean;
   loading: boolean;
@@ -45,17 +47,23 @@ export function NewRunDialog({
     ticket: string;
     repoPath: string;
     repoId?: string;
-    runnerMode: "mock" | "claude";
+    runnerMode: RunnerMode;
     testCommand: string;
+    prMode: PrMode;
+    templateId: string;
   }) => Promise<RunRecord | null>;
   onClose: () => void;
   onBrowseDirectory: (path: string) => Promise<DirectoryBrowseResponse>;
+  onRunnerModeChange?: (mode: RunnerMode) => void;
 }) {
   const [ticket, setTicket] = useState("");
   const [selectedRepoId, setSelectedRepoId] = useState<string>("");
   const [repoPath, setRepoPath] = useState(".");
-  const [runnerMode, setRunnerMode] = useState<"mock" | "claude">("mock");
+  const [runnerMode, setRunnerMode] = useState<RunnerMode>("mock");
   const [testCommand, setTestCommand] = useState("pnpm lint");
+  const [prMode, setPrMode] = useState<PrMode>("simulate");
+  const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
+  const [providers, setProviders] = useState<ProviderData[]>([]);
 
   const [showPicker, setShowPicker] = useState(false);
   const [pickerLoading, setPickerLoading] = useState(false);
@@ -64,6 +72,17 @@ export function NewRunDialog({
   const [pickerParentPath, setPickerParentPath] = useState<string | null>(null);
   const [pickerDirectories, setPickerDirectories] = useState<DirectoryEntry[]>([]);
   const [pickerShortcuts, setPickerShortcuts] = useState<Array<{ label: string; path: string }>>([]);
+
+  // Fetch providers on mount
+  useEffect(() => {
+    if (!open) return;
+    void fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data: { providers: ProviderData[] }) => {
+        setProviders(data.providers ?? []);
+      })
+      .catch(() => {});
+  }, [open]);
 
   // Pre-select repo from active workspace when dialog opens
   useEffect(() => {
@@ -78,6 +97,12 @@ export function NewRunDialog({
 
   const isCustomPath = selectedRepoId === CUSTOM_PATH_VALUE;
 
+  const handleRunnerChange = (value: string) => {
+    const mode = value as RunnerMode;
+    setRunnerMode(mode);
+    onRunnerModeChange?.(mode);
+  };
+
   const handleRepoChange = (value: string) => {
     setSelectedRepoId(value);
     if (value !== CUSTOM_PATH_VALUE) {
@@ -85,8 +110,12 @@ export function NewRunDialog({
       if (repo) {
         setTestCommand(repo.defaultTestCommand || "pnpm lint");
       }
+    } else {
+      setPrMode("simulate");
     }
   };
+
+  const selectedTemplate = BUILTIN_TEMPLATES.find((t) => t.id === templateId);
 
   const loadDirectory = useCallback(
     async (targetPath: string) => {
@@ -122,13 +151,17 @@ export function NewRunDialog({
       ticket: string;
       repoPath: string;
       repoId?: string;
-      runnerMode: "mock" | "claude";
+      runnerMode: RunnerMode;
       testCommand: string;
+      prMode: PrMode;
+      templateId: string;
     } = {
       ticket,
       repoPath: isCustomPath ? repoPath : ".",
       runnerMode,
       testCommand,
+      prMode,
+      templateId,
     };
 
     if (selectedRepoId && !isCustomPath) {
@@ -140,7 +173,11 @@ export function NewRunDialog({
       setTicket("");
       setSelectedRepoId("");
       setRepoPath(".");
+      setRunnerMode("mock");
       setTestCommand("pnpm lint");
+      setPrMode("simulate");
+      setTemplateId(DEFAULT_TEMPLATE_ID);
+      onRunnerModeChange?.("mock");
       onClose();
     }
   };
@@ -151,7 +188,7 @@ export function NewRunDialog({
         <DialogHeader>
           <DialogTitle>New Run</DialogTitle>
           <DialogDescription>
-            Create a new pipeline run. It will start from the Plan stage.
+            Create a new pipeline run. Configure per-stage model settings via column gear icons.
           </DialogDescription>
         </DialogHeader>
 
@@ -269,6 +306,30 @@ export function NewRunDialog({
             </div>
 
             <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium" htmlFor="templateSelect">
+                Pipeline
+              </label>
+              <Select value={templateId} onValueChange={setTemplateId}>
+                <SelectTrigger id="templateSelect" className="text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BUILTIN_TEMPLATES.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>
+                      <span className="font-medium">{t.label}</span>
+                      <span className="ml-2 text-muted-foreground text-[11px]">
+                        {t.stages.map((s) => s.name).join(" → ")}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedTemplate && (
+                <p className="text-[11px] text-muted-foreground">{selectedTemplate.description}</p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium" htmlFor="repoSelect">
                 Repository
               </label>
@@ -333,18 +394,41 @@ export function NewRunDialog({
               )}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium" htmlFor="runnerMode">
-                  Runner
+                  Provider
                 </label>
-                <Select value={runnerMode} onValueChange={(v) => setRunnerMode(v as "mock" | "claude")}>
+                <Select value={runnerMode} onValueChange={handleRunnerChange}>
                   <SelectTrigger id="runnerMode" className="text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="mock">mock</SelectItem>
-                    <SelectItem value="claude">claude -p</SelectItem>
+                    {providers.filter((p) => p.available).map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-medium" htmlFor="prMode">
+                  PR Mode
+                </label>
+                <Select
+                  value={prMode}
+                  onValueChange={(v) => setPrMode(v as PrMode)}
+                >
+                  <SelectTrigger id="prMode" className="text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="simulate">simulate</SelectItem>
+                    <SelectItem value="create" disabled={isCustomPath || !selectedRepoId}>
+                      create (real PR)
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>

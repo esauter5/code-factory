@@ -16,6 +16,4 @@ If the file {{progress_path}} exists, read it for context on prior attempts and 
 
 {{feedback}}
 
-Write a concise PR draft including title and summary.
-
-After the PR draft, include a section titled "## Suggested CLAUDE.md Updates" listing any new files, patterns, conventions, or architectural decisions introduced by this change that would be useful for future agents working on this codebase. If nothing notable was introduced, write "No updates suggested."
+{{pr_instructions}}

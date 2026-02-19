@@ -1,11 +1,11 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { RunRecord } from "@/lib/harness/types";
 
 const tokenPattern = /{{\s*([a-zA-Z0-9_]+)\s*}}/g;
 
-export async function loadStageTemplate(stageName: StageName): Promise<string> {
+export async function loadStageTemplate(stageName: string): Promise<string> {
   const templatePath = path.join(process.cwd(), "prompt-templates", `${stageName.toLowerCase()}.txt`);
   return readFile(templatePath, "utf8");
 }
@@ -46,7 +46,7 @@ export async function buildRepoContext(repoPath: string): Promise<string> {
   return lines.join("\n");
 }
 
-export function latestOutput(run: RunRecord, stageName: StageName): string {
+export function latestOutput(run: RunRecord, stageName: string): string {
   const stage = run.stages.find((item) => item.name === stageName);
   if (!stage || stage.attempts.length === 0) return "";
   return stage.attempts[stage.attempts.length - 1].outputPreview ?? "";

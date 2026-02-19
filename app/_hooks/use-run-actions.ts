@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import type { PrMode, RunnerMode, RunRecord, StageOverrides } from "@/lib/harness/types";
 
 interface RunResponse {
   run: RunRecord;
@@ -53,8 +53,13 @@ export function useRunActions(onSuccess: () => Promise<void>) {
       ticket: string;
       repoPath: string;
       repoId?: string;
-      runnerMode: "mock" | "claude";
+      runnerMode: RunnerMode;
       testCommand: string;
+      prMode: PrMode;
+      templateId?: string;
+      model?: string;
+      thinkingLevel?: string;
+      stageOverrides?: StageOverrides;
     }): Promise<RunRecord | null> => {
       if (!params.ticket.trim()) {
         setActionError("Ticket is required");
@@ -77,7 +82,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
   );
 
   const retryStage = useCallback(
-    async (runId: string, stageName: StageName) => {
+    async (runId: string, stageName: string) => {
       try {
         setActionLoading(true);
         setActionError("");
@@ -95,7 +100,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
   );
 
   const retryFrom = useCallback(
-    async (runId: string, stageName: StageName) => {
+    async (runId: string, stageName: string) => {
       try {
         setActionLoading(true);
         setActionError("");
@@ -113,7 +118,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
   );
 
   const editPrompt = useCallback(
-    async (runId: string, stageName: StageName, prompt: string) => {
+    async (runId: string, stageName: string, prompt: string) => {
       try {
         setActionLoading(true);
         setActionError("");
@@ -132,7 +137,7 @@ export function useRunActions(onSuccess: () => Promise<void>) {
   );
 
   const skipStage = useCallback(
-    async (runId: string, stageName: StageName, reason: string) => {
+    async (runId: string, stageName: string, reason: string) => {
       try {
         setActionLoading(true);
         setActionError("");

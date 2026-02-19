@@ -23,8 +23,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { RepoConfig, RunRecord, StageName } from "@/lib/harness/types";
-import { STAGE_ORDER } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
 import { EditPromptDialog } from "./edit-prompt-dialog";
@@ -78,14 +77,14 @@ export function RunDetailSheet({
 }: {
   run: RunRecord | null;
   repos: RepoConfig[];
-  activeTab: StageName;
-  onTabChange: (stage: StageName) => void;
+  activeTab: string;
+  onTabChange: (stage: string) => void;
   open: boolean;
   onClose: () => void;
-  onRetryStage: (runId: string, stage: StageName) => void;
-  onRetryFrom: (runId: string, stage: StageName) => void;
-  onEditPrompt: (runId: string, stage: StageName, prompt: string) => void;
-  onSkipStage: (runId: string, stage: StageName, reason: string) => void;
+  onRetryStage: (runId: string, stage: string) => void;
+  onRetryFrom: (runId: string, stage: string) => void;
+  onEditPrompt: (runId: string, stage: string, prompt: string) => void;
+  onSkipStage: (runId: string, stage: string, reason: string) => void;
   onCleanWorkspace: (runId: string) => void;
   actionLoading: boolean;
 }) {
@@ -116,11 +115,14 @@ export function RunDetailSheet({
   const hasActiveWorktree = run.worktree !== null && run.worktree.status === "ready";
   const canClean = hasActiveWorktree && !isRunning;
 
+  // Determine if the selected stage has a PR URL
+  const isPrStage = run.stages.some((s) => s.name === activeTab && s.name === "PR");
+
   return (
     <>
       <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
         <SheetContent className="w-full md:w-[680px] md:max-w-[680px] p-0 flex flex-col gap-0">
-          {/* ── Header ── */}
+          {/* -- Header -- */}
           <SheetHeader className="px-3 md:px-5 pt-5 pb-4 space-y-3 shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -156,22 +158,26 @@ export function RunDetailSheet({
               )}
               <span className="inline-flex items-center gap-1">
                 <Terminal className="h-3 w-3" />
-                {run.runnerMode}
+                {run.runnerMode}{run.model ? ` / ${run.model}` : ""}
               </span>
+              {run.thinkingLevel && (
+                <span className="inline-flex items-center gap-1">
+                  thinking: {run.thinkingLevel}
+                </span>
+              )}
               <span className="inline-flex items-center gap-1">
                 <Clock className="h-3 w-3" />
                 {elapsed(run.createdAt, run.status === "done" || run.status === "failed" ? run.updatedAt : null)}
               </span>
-              <span>{stageCount}/{STAGE_ORDER.length} stages</span>
+              <span>{stageCount}/{run.stages.length} stages</span>
             </div>
 
             {/* stage progress bar */}
             <div className="flex items-center gap-1 pt-1">
-              {STAGE_ORDER.map((name, i) => {
-                const sd = run.stages.find((s) => s.name === name);
-                const status = sd?.status ?? "queued";
+              {run.stages.map((sd, i) => {
+                const status = sd.status;
                 return (
-                  <div key={name} className="flex items-center gap-1 flex-1">
+                  <div key={sd.name} className="flex items-center gap-1 flex-1">
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
@@ -180,14 +186,14 @@ export function RunDetailSheet({
                             "h-1.5 flex-1 rounded-full transition-colors",
                             statusDot[status],
                           )}
-                          onClick={() => onTabChange(name)}
+                          onClick={() => onTabChange(sd.name)}
                         />
                       </TooltipTrigger>
                       <TooltipContent className="text-[10px]">
-                        {name}: {status}
+                        {sd.name}: {status}
                       </TooltipContent>
                     </Tooltip>
-                    {i < STAGE_ORDER.length - 1 && (
+                    {i < run.stages.length - 1 && (
                       <div className="w-1" />
                     )}
                   </div>
@@ -198,20 +204,19 @@ export function RunDetailSheet({
 
           <Separator />
 
-          {/* ── Tabs ── */}
+          {/* -- Tabs -- */}
           <Tabs
             value={activeTab}
-            onValueChange={(v) => onTabChange(v as StageName)}
+            onValueChange={onTabChange}
             className="flex flex-col flex-1 min-h-0"
           >
             <TabsList className="w-full justify-start rounded-none border-b bg-transparent px-3 md:px-5 h-10 shrink-0 overflow-x-auto flex-nowrap">
-              {STAGE_ORDER.map((stage) => {
-                const stageData = run.stages.find((s) => s.name === stage);
-                const status = stageData?.status ?? "queued";
+              {run.stages.map((stageData) => {
+                const status = stageData.status;
                 return (
                   <TabsTrigger
-                    key={stage}
-                    value={stage}
+                    key={stageData.name}
+                    value={stageData.name}
                     className="text-xs gap-1.5 data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-3"
                   >
                     <span
@@ -220,33 +225,24 @@ export function RunDetailSheet({
                         statusDot[status],
                       )}
                     />
-                    {stage}
+                    {stageData.name}
                   </TabsTrigger>
                 );
               })}
             </TabsList>
 
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {STAGE_ORDER.map((stage) => {
-                const stageData = run.stages.find((s) => s.name === stage);
-                return (
-                  <TabsContent key={stage} value={stage} className="px-3 md:px-5 mt-0 pb-4">
-                    {stageData ? (
-                      <StageDetail stage={stageData} runId={run.id} />
-                    ) : (
-                      <p className="text-xs text-muted-foreground py-8 text-center">
-                        No data for this stage yet.
-                      </p>
-                    )}
-                  </TabsContent>
-                );
-              })}
+              {run.stages.map((stageData) => (
+                <TabsContent key={stageData.name} value={stageData.name} className="px-3 md:px-5 mt-0 pb-4">
+                  <StageDetail stage={stageData} runId={run.id} prUrl={stageData.name === "PR" ? run.prUrl : undefined} />
+                </TabsContent>
+              ))}
             </div>
           </Tabs>
 
           <Separator />
 
-          {/* ── Action bar ── */}
+          {/* -- Action bar -- */}
           <div className="flex items-center gap-2 px-3 md:px-5 py-3 shrink-0 bg-muted/30">
             <Tooltip>
               <TooltipTrigger asChild>

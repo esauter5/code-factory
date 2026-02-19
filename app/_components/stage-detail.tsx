@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Clock, Copy } from "lucide-react";
 
+import { ExternalLink } from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -93,6 +95,9 @@ function formatLogLine(line: string): string {
       hook_name?: string;
       outcome?: string;
       model?: string;
+      content?: string;
+      text?: string;
+      status?: string;
       message?: {
         model?: string;
         content?: Array<{ type?: string; text?: string; name?: string }>;
@@ -102,9 +107,10 @@ function formatLogLine(line: string): string {
       num_turns?: number;
     };
 
+    // --- Claude / Gemini stream-json format ---
     if (event.type === "system") {
       if (event.subtype === "init") {
-        return `[init] ${event.model ?? "claude"} session started`;
+        return `[init] ${event.model ?? "provider"} session started`;
       }
       if (event.subtype === "hook_started") {
         return `[hook] ${event.hook_name ?? "hook"} ...`;
@@ -112,7 +118,6 @@ function formatLogLine(line: string): string {
       if (event.subtype === "hook_response") {
         return `[hook] ${event.hook_name ?? "hook"} ${event.outcome ?? "done"}`;
       }
-      // skip other system events
       return "";
     }
 
@@ -141,8 +146,23 @@ function formatLogLine(line: string): string {
       return "[tool_result] ...";
     }
 
+    // --- Codex JSONL format ---
+    if (event.type === "message" && event.content) {
+      const preview = event.content.length > 200 ? `${event.content.slice(0, 200)}...` : event.content;
+      return `[text] ${preview}`;
+    }
+    if (event.type === "text" && event.text) {
+      const preview = event.text.length > 200 ? `${event.text.slice(0, 200)}...` : event.text;
+      return `[text] ${preview}`;
+    }
+    if (event.type === "error") {
+      return `[error] ${event.content || event.message || "unknown error"}`;
+    }
+
+    // Unknown JSON event — skip
     return "";
   } catch {
+    // Non-JSON line — show raw
     return line;
   }
 }
@@ -255,11 +275,34 @@ function elapsed(from: string, to: string | null): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export function StageDetail({ stage, runId }: { stage: StageRun; runId: string }) {
+function extractPrUrl(stage: StageRun, prUrl?: string | null): string | null {
+  if (prUrl) return prUrl;
+  if (stage.name !== "PR" || stage.status !== "done") return null;
   const latest = stage.attempts.at(-1);
+  if (!latest?.outputPreview) return null;
+  const match = latest.outputPreview.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/);
+  return match?.[0] ?? null;
+}
+
+export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: string; prUrl?: string | null }) {
+  const latest = stage.attempts.at(-1);
+  const detectedPrUrl = extractPrUrl(stage, prUrl);
 
   return (
     <div className="flex flex-col gap-3 py-3">
+      {/* PR URL link */}
+      {detectedPrUrl && (
+        <a
+          href={detectedPrUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 rounded-md border bg-primary/10 text-primary px-3 py-1.5 text-xs font-medium hover:bg-primary/20 transition-colors w-fit"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          {detectedPrUrl}
+        </a>
+      )}
+
       {/* status + timing */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">

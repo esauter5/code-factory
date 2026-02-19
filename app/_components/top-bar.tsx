@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import type { PipelineTemplate } from "@/lib/harness/pipeline-templates";
 import type { RepoConfig } from "@/lib/harness/types";
 
 const ALL_WORKSPACES = "__all__";
@@ -20,6 +21,9 @@ export function TopBar({
   repos,
   selectedWorkspaceId,
   onWorkspaceChange,
+  templates,
+  selectedTemplateId,
+  onTemplateChange,
   onNewRun,
   onManageRepos,
 }: {
@@ -27,6 +31,9 @@ export function TopBar({
   repos: RepoConfig[];
   selectedWorkspaceId: string | null;
   onWorkspaceChange: (workspaceId: string | null) => void;
+  templates: PipelineTemplate[];
+  selectedTemplateId: string;
+  onTemplateChange: (templateId: string) => void;
   onNewRun: () => void;
   onManageRepos: () => void;
 }) {
@@ -53,6 +60,19 @@ export function TopBar({
             </SelectContent>
           </Select>
         )}
+
+        <Select value={selectedTemplateId} onValueChange={onTemplateChange}>
+          <SelectTrigger className="h-7 w-[120px] md:w-[140px] text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {templates.map((t) => (
+              <SelectItem key={t.id} value={t.id}>
+                {t.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="flex items-center gap-1.5 md:gap-3">

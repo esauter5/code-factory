@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { RunRecord, StageName } from "@/lib/harness/types";
+import { BUILTIN_TEMPLATES, DEFAULT_TEMPLATE_ID, getTemplateOrDefault } from "@/lib/harness/pipeline-templates";
+import type { PrMode, ProviderData, RunnerMode, RunRecord, StageOverride, StageOverrides } from "@/lib/harness/types";
 
 import { KanbanBoard } from "./_components/kanban-board";
 import { NewRunDialog } from "./_components/new-run-dialog";
@@ -12,6 +13,18 @@ import { TopBar } from "./_components/top-bar";
 import { getBoardStage, useRuns } from "./_hooks/use-runs";
 import { useRunActions } from "./_hooks/use-run-actions";
 import { useRepos } from "./_hooks/use-repos";
+
+const STAGE_OVERRIDES_KEY = "code-factory:stage-overrides";
+
+function loadStageOverrides(): StageOverrides {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(STAGE_OVERRIDES_KEY);
+    return raw ? (JSON.parse(raw) as StageOverrides) : {};
+  } catch {
+    return {};
+  }
+}
 
 export default function Page() {
   const { runs, error, setError, refresh } = useRuns();
@@ -38,8 +51,46 @@ export default function Page() {
   const [newRunOpen, setNewRunOpen] = useState(false);
   const [repoDialogOpen, setRepoDialogOpen] = useState(false);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_TEMPLATE_ID);
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
-  const [detailStage, setDetailStage] = useState<StageName>("Plan");
+  const [detailStage, setDetailStage] = useState<string>("Plan");
+
+  // Run-level runner mode (lifted from new-run dialog for column chips)
+  const [runnerMode, setRunnerMode] = useState<RunnerMode>("mock");
+
+  // Per-stage overrides with localStorage persistence
+  const [stageOverrides, setStageOverrides] = useState<StageOverrides>(loadStageOverrides);
+
+  useEffect(() => {
+    localStorage.setItem(STAGE_OVERRIDES_KEY, JSON.stringify(stageOverrides));
+  }, [stageOverrides]);
+
+  // Providers cache
+  const [providers, setProviders] = useState<ProviderData[]>([]);
+
+  useEffect(() => {
+    void fetch("/api/providers")
+      .then((res) => res.json())
+      .then((data: { providers: ProviderData[] }) => {
+        setProviders(data.providers ?? []);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleOverrideChange = useCallback((stageName: string, override: StageOverride | null) => {
+    setStageOverrides((prev) => {
+      const next = { ...prev };
+      if (override) {
+        next[stageName] = override;
+      } else {
+        delete next[stageName];
+      }
+      return next;
+    });
+  }, []);
+
+  const selectedTemplate = useMemo(() => getTemplateOrDefault(selectedTemplateId), [selectedTemplateId]);
+  const boardStageNames = useMemo(() => selectedTemplate.stages.map((s) => s.name), [selectedTemplate]);
 
   // Filter runs by selected workspace
   const filteredRuns = useMemo(() => {
@@ -48,21 +99,21 @@ export default function Page() {
   }, [runs, selectedWorkspaceId]);
 
   const filteredBoardColumns = useMemo(() => {
-    const columns: Record<StageName, RunRecord[]> = {
-      Plan: [],
-      Implement: [],
-      Verify: [],
-      Test: [],
-      PR: [],
-    };
-    for (const run of filteredRuns) {
-      columns[getBoardStage(run)].push(run);
+    const columns: Record<string, RunRecord[]> = {};
+    for (const name of boardStageNames) {
+      columns[name] = [];
     }
-    for (const key of Object.keys(columns) as StageName[]) {
+    for (const run of filteredRuns) {
+      const stage = getBoardStage(run);
+      if (columns[stage]) {
+        columns[stage].push(run);
+      }
+    }
+    for (const key of Object.keys(columns)) {
       columns[key].sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
     }
     return columns;
-  }, [filteredRuns]);
+  }, [filteredRuns, boardStageNames]);
 
   const filteredTotals = useMemo(
     () => ({
@@ -74,7 +125,7 @@ export default function Page() {
     [filteredRuns],
   );
 
-  // Close detail sheet if run disappears (computed, not effect-driven)
+  // Close detail sheet if run disappears
   const runStillExists = detailRunId !== null && runs.some((r) => r.id === detailRunId);
   const effectiveDetailRunId = runStillExists ? detailRunId : null;
 
@@ -83,7 +134,7 @@ export default function Page() {
     [runs, effectiveDetailRunId],
   );
 
-  const openRunDetail = useCallback((run: RunRecord, stageName: StageName) => {
+  const openRunDetail = useCallback((run: RunRecord, stageName: string) => {
     setDetailRunId(run.id);
     setDetailStage(stageName);
   }, []);
@@ -93,17 +144,24 @@ export default function Page() {
       ticket: string;
       repoPath: string;
       repoId?: string;
-      runnerMode: "mock" | "claude";
+      runnerMode: RunnerMode;
       testCommand: string;
+      prMode: PrMode;
+      templateId: string;
+      model?: string;
+      thinkingLevel?: string;
     }) => {
-      const result = await createRun(params);
+      const result = await createRun({
+        ...params,
+        stageOverrides,
+      });
       if (result) {
         setDetailRunId(result.id);
         setDetailStage(getBoardStage(result));
       }
       return result;
     },
-    [createRun],
+    [createRun, stageOverrides],
   );
 
   const combinedError = error || actionError;
@@ -115,6 +173,9 @@ export default function Page() {
         repos={repos}
         selectedWorkspaceId={selectedWorkspaceId}
         onWorkspaceChange={setSelectedWorkspaceId}
+        templates={BUILTIN_TEMPLATES}
+        selectedTemplateId={selectedTemplateId}
+        onTemplateChange={setSelectedTemplateId}
         onNewRun={() => setNewRunOpen(true)}
         onManageRepos={() => setRepoDialogOpen(true)}
       />
@@ -136,7 +197,17 @@ export default function Page() {
       )}
 
       <main className="flex-1 min-h-0 overflow-hidden md:overflow-x-auto p-1.5 md:p-2">
-        <KanbanBoard boardColumns={filteredBoardColumns} repos={repos} onCardClick={openRunDetail} />
+        <KanbanBoard
+          stageNames={boardStageNames}
+          boardColumns={filteredBoardColumns}
+          repos={repos}
+          onCardClick={openRunDetail}
+          stageDefinitions={selectedTemplate.stages}
+          stageOverrides={stageOverrides}
+          onOverrideChange={handleOverrideChange}
+          providers={providers}
+          runnerMode={runnerMode}
+        />
       </main>
 
       <NewRunDialog
@@ -147,6 +218,7 @@ export default function Page() {
         onSubmit={handleCreateRun}
         onClose={() => setNewRunOpen(false)}
         onBrowseDirectory={browseDirectory}
+        onRunnerModeChange={setRunnerMode}
       />
 
       <RunDetailSheet

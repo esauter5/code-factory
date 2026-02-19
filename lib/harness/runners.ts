@@ -3,68 +3,10 @@ import { appendFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import type { RunnerResult, StageName } from "@/lib/harness/types";
-
-interface StreamJsonEvent {
-  type: string;
-  subtype?: string;
-  message?: {
-    content: Array<{ type: string; text?: string; name?: string; input?: unknown }>;
-  };
-  result?: string;
-  total_cost_usd?: number;
-  duration_ms?: number;
-  is_error?: boolean;
-}
-
-function parseStreamJsonOutput(raw: string): { output: string; success: boolean; error: string } {
-  const lines = raw.split("\n").filter((l) => l.trim());
-  const events: StreamJsonEvent[] = [];
-
-  for (const line of lines) {
-    try {
-      events.push(JSON.parse(line) as StreamJsonEvent);
-    } catch {
-      // skip malformed lines
-    }
-  }
-
-  // Extract text content from assistant messages
-  const textParts: string[] = [];
-  for (const event of events) {
-    if (event.type === "assistant" && event.message?.content) {
-      for (const block of event.message.content) {
-        if (block.type === "text" && block.text) {
-          textParts.push(block.text);
-        }
-      }
-    }
-  }
-
-  const output = textParts.join("\n");
-
-  // Check result event for success/error
-  const resultEvent = events.find((e) => e.type === "result");
-  if (resultEvent) {
-    if (resultEvent.subtype === "error" || resultEvent.is_error) {
-      return {
-        output: output || resultEvent.result || "",
-        success: false,
-        error: resultEvent.result || "Claude returned an error result",
-      };
-    }
-    // Use result.result as fallback if no assistant text was extracted
-    const finalOutput = output || resultEvent.result || "";
-    return { output: finalOutput, success: true, error: "" };
-  }
-
-  // No result event — treat as success if we got output
-  if (output.length > 0) {
-    return { output, success: true, error: "" };
-  }
-
-  return { output: "", success: false, error: "No output or result event from Claude" };
-}
+import type { StageDefinition } from "@/lib/harness/pipeline-templates";
+import type { ProviderInfo } from "@/lib/harness/providers";
+import { getProvider, parseStreamJsonOutput } from "@/lib/harness/providers";
+import type { RunnerResult } from "@/lib/harness/types";
 
 function appendToLog(logDir: string, chunk: string): void {
   const logFile = path.join(logDir, "live.log");
@@ -74,17 +16,23 @@ function appendToLog(logDir: string, chunk: string): void {
   });
 }
 
-export async function runClaudePrompt(
+export async function runProviderPrompt(
+  provider: ProviderInfo,
   prompt: string,
   cwd: string,
   timeoutMs: number,
+  model?: string,
+  thinkingLevel?: string,
   logDir?: string,
 ): Promise<RunnerResult> {
   return new Promise<RunnerResult>((resolve) => {
-    const child = spawn("claude", ["-p", "--verbose", "--output-format", "stream-json", prompt], {
+    const args = provider.buildArgs(prompt, model, thinkingLevel);
+    const extraEnv = provider.buildEnv(thinkingLevel);
+
+    const child = spawn(provider.binary, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: { ...process.env, ...extraEnv },
     });
 
     let stdout = "";
@@ -122,7 +70,7 @@ export async function runClaudePrompt(
       clearTimeout(timeout);
 
       if (timedOut) {
-        const parsed = parseStreamJsonOutput(stdout);
+        const parsed = provider.parseOutput(stdout);
         resolve({
           success: false,
           output: parsed.output || stdout.trim(),
@@ -132,8 +80,7 @@ export async function runClaudePrompt(
         return;
       }
 
-      // Parse the NDJSON stream
-      const parsed = parseStreamJsonOutput(stdout);
+      const parsed = provider.parseOutput(stdout);
 
       if (code !== 0 && !parsed.success) {
         resolve({
@@ -154,6 +101,22 @@ export async function runClaudePrompt(
     });
   });
 }
+
+/** Backward-compatible wrapper — delegates to runProviderPrompt with Claude provider */
+export async function runClaudePrompt(
+  prompt: string,
+  cwd: string,
+  timeoutMs: number,
+  logDir?: string,
+): Promise<RunnerResult> {
+  const claude = getProvider("claude");
+  if (!claude) {
+    return { success: false, output: "", logs: "", error: "Claude provider not found" };
+  }
+  return runProviderPrompt(claude, prompt, cwd, timeoutMs, undefined, undefined, logDir);
+}
+
+export { parseStreamJsonOutput };
 
 export async function runTestCommand(
   command: string,
@@ -231,56 +194,44 @@ export async function runTestCommand(
   });
 }
 
-export async function runMockStage(stageName: StageName, prompt: string): Promise<RunnerResult> {
+export async function runMockStage(stageDef: StageDefinition, prompt: string): Promise<RunnerResult> {
   await sleep(250);
-  const base = `generated_by: mock_runner\nstage: ${stageName}\n`;
+  const base = `generated_by: mock_runner\nstage: ${stageDef.name}\n`;
 
-  if (stageName === "Verify" && (prompt.includes("FAIL_VERIFY") || prompt.includes("FORCE_BLOCKER"))) {
+  // Handle failIfOutputContains test triggers
+  if (
+    stageDef.successCriteria?.failIfOutputContains &&
+    (prompt.includes("FAIL_VERIFY") || prompt.includes("FORCE_BLOCKER"))
+  ) {
     return {
       success: false,
-      output: `${base}\nBLOCKER: Missing validation in implementation.`,
-      logs: "mock verify detected blocker",
-      error: "verify blocker found",
+      output: `${base}\n${stageDef.successCriteria.failIfOutputContains} Missing validation in implementation.`,
+      logs: `mock ${stageDef.name.toLowerCase()} detected blocker`,
+      error: `${stageDef.name.toLowerCase()} blocker found`,
     };
   }
 
-  if (stageName === "Plan") {
+  if (stageDef.executionType === "shell-command") {
     return {
       success: true,
-      output: `${base}\n# Plan\n- Understand request\n- Propose implementation\n- Validate with tests`,
-      logs: "mock plan success",
+      output: "Tests passed",
+      logs: `command: (mock)\nreturn_code: 0\nstdout:\nAll tests passed\nstderr:\n`,
       error: "",
     };
   }
-  if (stageName === "Implement") {
-    return {
-      success: true,
-      output: `${base}\n# Implementation Summary\n- Created implementation updates\n- Prepared for verification`,
-      logs: "mock implement success",
-      error: "",
-    };
-  }
-  if (stageName === "Verify") {
-    return {
-      success: true,
-      output: `${base}\n# Verify Report\nNo blocker findings.`,
-      logs: "mock verify success",
-      error: "",
-    };
-  }
-  if (stageName === "PR") {
-    return {
-      success: true,
-      output: `${base}\n# PR Draft\ntitle: Automated SDLC update\nsummary: Generated changes from fixed pipeline`,
-      logs: "mock pr success",
-      error: "",
-    };
-  }
+
+  const nameLower = stageDef.name.toLowerCase();
+  const mockOutputs: Record<string, string> = {
+    plan: `${base}\n# Plan\n- Understand request\n- Propose implementation\n- Validate with tests`,
+    implement: `${base}\n# Implementation Summary\n- Created implementation updates\n- Prepared for verification`,
+    verify: `${base}\n# Verify Report\nNo blocker findings.`,
+    pr: `${base}\n# PR Draft\ntitle: Automated SDLC update\nsummary: Generated changes from fixed pipeline`,
+  };
 
   return {
     success: true,
-    output: `${base}\nNo output`,
-    logs: "mock generic success",
+    output: mockOutputs[nameLower] ?? `${base}\nCompleted ${stageDef.name} stage.`,
+    logs: `mock ${nameLower} success`,
     error: "",
   };
 }
