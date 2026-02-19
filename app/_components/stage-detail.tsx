@@ -172,7 +172,7 @@ function LiveOutput({ runId }: { runId: string }) {
         .filter((l) => l.trim())
         .map(formatLogLine)
         .join("\n")
-    : "Waiting for output...";
+    : "Waiting for Claude to start streaming...";
 
   return (
     <Collapsible defaultOpen={true}>

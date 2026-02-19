@@ -61,7 +61,9 @@ function parseStreamJsonOutput(raw: string): { output: string; success: boolean;
 function appendToLog(logDir: string, chunk: string): void {
   const logFile = path.join(logDir, "live.log");
   // Fire-and-forget — don't block the stream
-  void appendFile(logFile, chunk, "utf8").catch(() => {});
+  void appendFile(logFile, chunk, "utf8").catch((err) => {
+    console.error("[runner] appendToLog failed:", logFile, err);
+  });
 }
 
 export async function runClaudePrompt(

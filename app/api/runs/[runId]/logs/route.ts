@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { getOrchestrator } from "@/lib/harness/singleton";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 interface RouteParams {
   params: Promise<{ runId: string }>;
