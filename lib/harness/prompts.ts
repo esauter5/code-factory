@@ -46,8 +46,16 @@ export async function buildRepoContext(repoPath: string): Promise<string> {
   return lines.join("\n");
 }
 
-export function latestOutput(run: RunRecord, stageName: string): string {
+export async function latestOutput(run: RunRecord, stageName: string): Promise<string> {
   const stage = run.stages.find((item) => item.name === stageName);
   if (!stage || stage.attempts.length === 0) return "";
-  return stage.attempts[stage.attempts.length - 1].outputPreview ?? "";
+  const attempt = stage.attempts[stage.attempts.length - 1];
+  if (attempt.artifactPath) {
+    try {
+      return await readFile(attempt.artifactPath, "utf8");
+    } catch {
+      // Fall back to outputPreview if file read fails
+    }
+  }
+  return attempt.outputPreview ?? "";
 }

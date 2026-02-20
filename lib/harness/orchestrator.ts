@@ -492,16 +492,16 @@ export class HarnessOrchestrator {
     for (const stage of run.stages) {
       if (stage.name === stageName) break;
       const key = `${stage.name.toLowerCase()}_artifact`;
-      vars[key] = latestOutput(run, stage.name);
+      vars[key] = await latestOutput(run, stage.name);
     }
 
     // Legacy aliases for backward compat with existing prompt templates
-    vars.plan_artifact = latestOutput(run, "Plan");
-    vars.implementation_artifact = latestOutput(run, "Implement");
-    vars.verify_artifact = latestOutput(run, "Verify");
-    vars.test_report = latestOutput(run, "Test");
-    vars.pr_artifact = latestOutput(run, "PR");
-    vars.review_artifact = latestOutput(run, "Review");
+    vars.plan_artifact = await latestOutput(run, "Plan");
+    vars.implementation_artifact = await latestOutput(run, "Implement");
+    vars.verify_artifact = await latestOutput(run, "Verify");
+    vars.test_report = await latestOutput(run, "Test");
+    vars.pr_artifact = await latestOutput(run, "PR");
+    vars.review_artifact = await latestOutput(run, "Review");
 
     return renderTemplate(template, vars);
   }
@@ -558,7 +558,7 @@ export class HarnessOrchestrator {
           lines.push(`Error: ${attempt.error}`);
         }
         if (attempt.outputPreview) {
-          lines.push(`Output: ${attempt.outputPreview.slice(0, 2000)}`);
+          lines.push(`Output: ${attempt.outputPreview}`);
         }
         lines.push("");
       }
@@ -576,10 +576,10 @@ export class HarnessOrchestrator {
         lines.push(`Error: ${lastAttempt.error}`);
       }
       if (lastAttempt.outputPreview) {
-        lines.push(`Output: ${lastAttempt.outputPreview.slice(0, 2000)}`);
+        lines.push(`Output: ${lastAttempt.outputPreview}`);
       }
       if (lastAttempt.logsPreview) {
-        lines.push(`Logs: ${lastAttempt.logsPreview.slice(0, 2000)}`);
+        lines.push(`Logs: ${lastAttempt.logsPreview}`);
       }
       lines.push("");
     }
@@ -744,8 +744,8 @@ export class HarnessOrchestrator {
     attempt.status = result.success ? "done" : "failed";
     attempt.artifactPath = artifactPath;
     attempt.logPath = logsPath;
-    attempt.outputPreview = result.output.slice(0, 4000);
-    attempt.logsPreview = result.logs.slice(0, 4000);
+    attempt.outputPreview = result.output;
+    attempt.logsPreview = result.logs;
     attempt.error = result.error;
 
     await this.appendProgress(runId, stageName, attempt.attempt, result);
@@ -818,7 +818,7 @@ export class HarnessOrchestrator {
       lines.push(`- Error: ${result.error}`);
     }
 
-    const preview = result.output.slice(0, 500).trim();
+    const preview = result.output.trim();
     if (preview) {
       lines.push(`- Output summary: ${preview}`);
     }
