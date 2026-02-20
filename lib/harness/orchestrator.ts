@@ -63,6 +63,45 @@ export class HarnessOrchestrator {
 
   constructor(store: JsonRunStore) {
     this.store = store;
+    void this.cleanupOrphanedRuns();
+  }
+
+  /** Mark any runs stuck in "running" as failed — their processes died with the previous server. */
+  private async cleanupOrphanedRuns(): Promise<void> {
+    try {
+      const runs = await this.store.listRuns();
+      for (const run of runs) {
+        if (run.status !== "running") continue;
+        if (this.active.has(run.id)) continue;
+
+        run.status = "failed";
+        run.currentStage = null;
+        run.updatedAt = nowIso();
+        for (const stage of run.stages) {
+          if (stage.status === "running") {
+            stage.status = "failed";
+            stage.lastError = "Server restarted while stage was running";
+            stage.endedAt = nowIso();
+            for (const attempt of stage.attempts) {
+              if (attempt.status === "running") {
+                attempt.status = "failed";
+                attempt.endedAt = nowIso();
+                attempt.error = "Server restarted while stage was running";
+              }
+            }
+          }
+        }
+        appendEvent(run, {
+          type: "stage_failed",
+          stage: run.stages.find((s) => s.status === "failed")?.name ?? "",
+          message: "Server restarted while stage was running",
+        });
+        await this.store.saveRun(run);
+        console.log(`[orchestrator] Cleaned up orphaned run ${run.id}`);
+      }
+    } catch (err) {
+      console.error("[orchestrator] Failed to clean up orphaned runs:", err);
+    }
   }
 
   async listRuns(): Promise<RunRecord[]> {
@@ -128,6 +167,8 @@ export class HarnessOrchestrator {
       templateSnapshot: mergedStages,
       model: input.model ?? null,
       thinkingLevel: input.thinkingLevel ?? null,
+      archived: false,
+      cycle: 1,
     };
     appendEvent(run, {
       type: "run_created",
@@ -181,13 +222,14 @@ export class HarnessOrchestrator {
       run.stages[i].startedAt = null;
       run.stages[i].endedAt = null;
     }
+    run.cycle = (run.cycle ?? 1) + 1;
     run.status = "queued";
     run.currentStage = null;
     run.updatedAt = nowIso();
     appendEvent(run, {
       type: "retry_from",
       stage: stageName,
-      message: `Retry from ${stageName}`,
+      message: `Retry from ${stageName} (cycle ${run.cycle})`,
     });
     await this.store.saveRun(run);
     await this.startRun(runId);
@@ -269,6 +311,58 @@ export class HarnessOrchestrator {
     return run;
   }
 
+  async cancelRun(runId: string): Promise<RunRecord> {
+    const run = await this.requireRun(runId);
+    if (run.status !== "failed" && run.status !== "queued") {
+      throw new Error("can only cancel failed or queued runs");
+    }
+    if (this.active.has(runId)) {
+      throw new Error("run is currently active");
+    }
+    run.status = "cancelled";
+    run.currentStage = null;
+    run.updatedAt = nowIso();
+    appendEvent(run, {
+      type: "run_cancelled",
+      stage: "",
+      message: "Run cancelled by user",
+    });
+    await this.store.saveRun(run);
+    return run;
+  }
+
+  async archiveRun(runId: string): Promise<RunRecord> {
+    const run = await this.requireRun(runId);
+    if (run.status !== "done" && run.status !== "failed" && run.status !== "cancelled") {
+      throw new Error("can only archive done, failed, or cancelled runs");
+    }
+    run.archived = true;
+    run.updatedAt = nowIso();
+    appendEvent(run, {
+      type: "run_archived",
+      stage: "",
+      message: "Run archived",
+    });
+    await this.store.saveRun(run);
+    return run;
+  }
+
+  async unarchiveRun(runId: string): Promise<RunRecord> {
+    const run = await this.requireRun(runId);
+    if (!run.archived) {
+      throw new Error("run is not archived");
+    }
+    run.archived = false;
+    run.updatedAt = nowIso();
+    appendEvent(run, {
+      type: "run_unarchived",
+      stage: "",
+      message: "Run unarchived",
+    });
+    await this.store.saveRun(run);
+    return run;
+  }
+
   async listRepos(): Promise<RepoConfig[]> {
     return this.store.listRepos();
   }
@@ -329,11 +423,16 @@ export class HarnessOrchestrator {
         );
         await mkdir(attemptDir, { recursive: true });
 
-        const prompt = next.promptOverride ?? (await this.buildPrompt(run, next.name));
+        const stageDef = this.getStageDefinition(run, next.name);
+        const isShellCommand = stageDef?.executionType === "shell-command";
+        const prompt = isShellCommand
+          ? (stageDef?.templateOrCommand === "$testCommand" ? run.testCommand : stageDef?.templateOrCommand ?? "")
+          : (next.promptOverride ?? (await this.buildPrompt(run, next.name)));
         await writeFile(path.join(attemptDir, "prompt.txt"), prompt, "utf8");
 
         const attempt: StageAttempt = {
           attempt: attemptNumber,
+          cycle: run.cycle ?? 1,
           startedAt: nowIso(),
           endedAt: null,
           status: "running",
@@ -362,6 +461,8 @@ export class HarnessOrchestrator {
         const result = await this.executeStage(run, next.name, prompt, attemptDir);
         await this.applyStageResult(runId, next.name, result);
         if (!result.success) {
+          const reverted = await this.tryAutoRevert(runId, next.name);
+          if (reverted) continue;
           return;
         }
       }
@@ -384,6 +485,7 @@ export class HarnessOrchestrator {
       progress_path: this.progressPath(run.id),
       feedback: this.buildFeedback(run, stageName),
       pr_instructions: this.buildPrInstructions(run),
+      pr_url: run.prUrl ?? "",
     };
 
     // Inject outputs from all prior stages as {{<name_lowercase>_artifact}}
@@ -398,6 +500,8 @@ export class HarnessOrchestrator {
     vars.implementation_artifact = latestOutput(run, "Implement");
     vars.verify_artifact = latestOutput(run, "Verify");
     vars.test_report = latestOutput(run, "Test");
+    vars.pr_artifact = latestOutput(run, "PR");
+    vars.review_artifact = latestOutput(run, "Review");
 
     return renderTemplate(template, vars);
   }
@@ -417,13 +521,19 @@ export class HarnessOrchestrator {
         `2. Push the branch to the remote:`,
         `   git push -u origin ${branch}`,
         "",
-        `3. Create the PR using the GitHub CLI:`,
+        `3. Check if a PR already exists for this branch:`,
+        `   gh pr view --json url 2>/dev/null`,
+        "",
+        `   If a PR already exists, skip to step 5 (the existing PR updates automatically with the new push).`,
+        `   If no PR exists, continue to step 4.`,
+        "",
+        `4. Create the PR using the GitHub CLI:`,
         `   gh pr create --base ${baseBranch} --head ${branch} --title "<PR title>" --body "<PR body with summary>"`,
         "",
-        "4. Output the PR URL returned by gh pr create. The URL must appear in your output.",
+        "5. Output the PR URL (from step 3 or 4). The URL must appear in your output.",
         "",
         "IMPORTANT: Do NOT just write a draft. Actually run the git and gh commands above.",
-        "After the PR is created, include the PR URL on its own line in your output.",
+        "After the PR is created or updated, include the PR URL on its own line in your output.",
       ].join("\n");
     }
 
@@ -485,6 +595,46 @@ export class HarnessOrchestrator {
     ].join("\n");
   }
 
+  private async tryAutoRevert(runId: string, failedStageName: string): Promise<boolean> {
+    const run = await this.requireRun(runId);
+    const stageDef = this.getStageDefinition(run, failedStageName);
+    if (!stageDef?.onFailure) return false;
+
+    const { revertTo, maxCycles = 3 } = stageDef.onFailure;
+    if ((run.cycle ?? 1) >= maxCycles) {
+      appendEvent(run, {
+        type: "auto_revert_limit",
+        stage: failedStageName,
+        message: `Auto-revert cycle limit reached (${maxCycles}), stopping`,
+      });
+      await this.store.saveRun(run);
+      return false;
+    }
+
+    const startIdx = run.stages.findIndex((s) => s.name === revertTo);
+    if (startIdx === -1) return false;
+
+    for (let i = startIdx; i < run.stages.length; i += 1) {
+      run.stages[i].status = "queued";
+      run.stages[i].lastError = "";
+      run.stages[i].skipReason = "";
+      run.stages[i].startedAt = null;
+      run.stages[i].endedAt = null;
+    }
+
+    run.cycle = (run.cycle ?? 1) + 1;
+    run.status = "running";
+    run.currentStage = null;
+    run.updatedAt = nowIso();
+    appendEvent(run, {
+      type: "auto_revert",
+      stage: failedStageName,
+      message: `Auto-reverting to ${revertTo} after ${failedStageName} failure (cycle ${run.cycle})`,
+    });
+    await this.store.saveRun(run);
+    return true;
+  }
+
   private async executeStage(run: RunRecord, stageName: string, prompt: string, logDir?: string): Promise<RunnerResult> {
     const stageDef = this.getStageDefinition(run, stageName);
     const timeoutMs = stageDef?.timeoutMs ?? 120_000;
@@ -497,10 +647,10 @@ export class HarnessOrchestrator {
       return runTestCommand(command, run.repoPath, timeoutMs, logDir);
     }
 
-    // Resolve provider/model/thinking with per-stage overrides
-    const providerId = stageDef?.provider ?? run.runnerMode;
-    const model = stageDef?.model ?? run.model ?? undefined;
-    const thinkingLevel = stageDef?.thinkingLevel ?? run.thinkingLevel ?? undefined;
+    // TEMP: force claude with default model + medium thinking
+    const providerId = run.runnerMode === "mock" ? "mock" : "claude";
+    const model = undefined;
+    const thinkingLevel = "medium";
 
     // Mock or provider-based execution
     let result: RunnerResult;
@@ -516,7 +666,7 @@ export class HarnessOrchestrator {
 
     // Apply success criteria generically
     if (stageDef?.successCriteria) {
-      const { failIfOutputContains, extractUrlPattern } = stageDef.successCriteria;
+      const { failIfOutputContains, failIfOutputContainsAny, extractUrlPattern } = stageDef.successCriteria;
 
       // failIfOutputContains check
       if (failIfOutputContains && result.success && result.output.toUpperCase().includes(failIfOutputContains.toUpperCase())) {
@@ -526,6 +676,20 @@ export class HarnessOrchestrator {
           logs: result.logs,
           error: `${stageName} found blocker findings`,
         };
+      }
+
+      // failIfOutputContainsAny check
+      if (failIfOutputContainsAny && result.success) {
+        const upperOutput = result.output.toUpperCase();
+        const matched = failIfOutputContainsAny.find((keyword) => upperOutput.includes(keyword.toUpperCase()));
+        if (matched) {
+          return {
+            success: false,
+            output: result.output,
+            logs: result.logs,
+            error: `${stageName} found ${matched.replace(":", "").toLowerCase()} findings`,
+          };
+        }
       }
 
       // extractUrlPattern check (e.g. PR URL extraction)

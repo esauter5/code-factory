@@ -8,6 +8,98 @@ import type { ProviderInfo } from "@/lib/harness/providers";
 import { getProvider, parseStreamJsonOutput } from "@/lib/harness/providers";
 import type { RunnerResult } from "@/lib/harness/types";
 
+function isNoOutputParseError(error: string): boolean {
+  const normalized = error.toLowerCase();
+  return normalized.includes("no output") || normalized.includes("no output or result event");
+}
+
+function buildProviderLogs(stdout: string, stderr: string): string {
+  const out = stdout.trim();
+  const err = stderr.trim();
+
+  if (out && err) {
+    return `stdout:\n${out}\n\nstderr:\n${err}`;
+  }
+  if (out) {
+    return out;
+  }
+  if (err) {
+    return `stderr:\n${err}`;
+  }
+  return "";
+}
+
+function looksLikeStructuredJsonStream(raw: string): boolean {
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return false;
+
+  const sample = lines.slice(0, Math.min(lines.length, 5));
+  let jsonLike = 0;
+
+  for (const line of sample) {
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed && typeof parsed === "object" && ("type" in parsed || "message" in parsed || "subtype" in parsed)) {
+        jsonLike += 1;
+      }
+    } catch {
+      // not JSON
+    }
+  }
+
+  return jsonLike >= Math.ceil(sample.length / 2);
+}
+
+function safeArtifactOutput(parsedOutput: string, rawStdout: string): string {
+  const output = parsedOutput.trim();
+  if (output) {
+    return output;
+  }
+
+  const stdout = rawStdout.trim();
+  if (!stdout) {
+    return "";
+  }
+
+  // Prevent raw stream-json / JSONL events from being persisted as artifact output.
+  if (looksLikeStructuredJsonStream(stdout)) {
+    return "";
+  }
+
+  return stdout;
+}
+
+function parseProviderOutput(
+  provider: ProviderInfo,
+  stdout: string,
+  stderr: string,
+): { output: string; success: boolean; error: string } {
+  const parsedStdout = provider.parseOutput(stdout);
+  if (parsedStdout.success) {
+    return parsedStdout;
+  }
+
+  if (!stderr.trim()) {
+    return parsedStdout;
+  }
+
+  // Some provider versions emit structured events on stderr instead of stdout.
+  const parsedStderr = provider.parseOutput(stderr);
+  if (parsedStderr.success) {
+    return parsedStderr;
+  }
+
+  if (parsedStderr.error && isNoOutputParseError(parsedStdout.error || "")) {
+    return { ...parsedStdout, error: parsedStderr.error };
+  }
+
+  return parsedStdout;
+}
+
 function appendToLog(logDir: string, chunk: string): void {
   const logFile = path.join(logDir, "live.log");
   // Fire-and-forget — don't block the stream
@@ -53,7 +145,11 @@ export async function runProviderPrompt(
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stderr += text;
+      if (logDir) {
+        appendToLog(logDir, text);
+      }
     });
 
     child.on("error", (error) => {
@@ -61,42 +157,65 @@ export async function runProviderPrompt(
       resolve({
         success: false,
         output: stdout.trim(),
-        logs: stderr.trim(),
+        logs: buildProviderLogs(stdout, stderr),
         error: error.message,
       });
     });
 
     child.on("close", (code) => {
       clearTimeout(timeout);
+      const stdoutTrim = stdout.trim();
+      const stderrTrim = stderr.trim();
+      const logs = buildProviderLogs(stdout, stderr);
 
       if (timedOut) {
-        const parsed = provider.parseOutput(stdout);
+        const parsed = parseProviderOutput(provider, stdout, stderr);
         resolve({
           success: false,
-          output: parsed.output || stdout.trim(),
-          logs: stdout.trim(),
+          output: safeArtifactOutput(parsed.output, stdout),
+          logs,
           error: `command timed out after ${Math.round(timeoutMs / 1000)}s`,
         });
         return;
       }
 
-      const parsed = provider.parseOutput(stdout);
+      const parsed = parseProviderOutput(provider, stdout, stderr);
 
       if (code !== 0 && !parsed.success) {
+        const resolvedError =
+          stderrTrim && isNoOutputParseError(parsed.error || "")
+            ? stderrTrim
+            : parsed.error || `command exited with code ${code}`;
         resolve({
           success: false,
-          output: parsed.output || stdout.trim(),
-          logs: stdout.trim(),
-          error: parsed.error || `command exited with code ${code}`,
+          output: safeArtifactOutput(parsed.output, stdout),
+          logs,
+          error: resolvedError,
         });
         return;
       }
 
+      // Fallback: if provider exited cleanly with non-empty plain text, accept it.
+      if (!parsed.success && code === 0 && stdoutTrim && !stderrTrim) {
+        resolve({
+          success: true,
+          output: safeArtifactOutput(stdoutTrim, stdout),
+          logs,
+          error: "",
+        });
+        return;
+      }
+
+      const resolvedError =
+        stderrTrim && isNoOutputParseError(parsed.error || "")
+          ? stderrTrim
+          : parsed.error;
+
       resolve({
         success: parsed.success,
-        output: parsed.output,
-        logs: stdout.trim(),
-        error: parsed.error,
+        output: safeArtifactOutput(parsed.output, stdout),
+        logs,
+        error: resolvedError,
       });
     });
   });

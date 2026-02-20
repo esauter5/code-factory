@@ -7,11 +7,12 @@ export const STAGE_ORDER = DEFAULT_STAGE_ORDER;
 export type StageName = string;
 export type RunnerMode = "mock" | "claude" | "codex" | "gemini";
 export type PrMode = "simulate" | "create";
-export type RunStatus = "queued" | "running" | "failed" | "done";
+export type RunStatus = "queued" | "running" | "failed" | "done" | "cancelled";
 export type StageStatus = "queued" | "running" | "failed" | "done" | "skipped";
 
 export interface StageAttempt {
   attempt: number;
+  cycle: number;
   startedAt: string;
   endedAt: string | null;
   status: "running" | "done" | "failed";
@@ -81,6 +82,8 @@ export interface RunRecord {
   templateSnapshot: StageDefinition[] | null;
   model: string | null;
   thinkingLevel: string | null;
+  archived: boolean;
+  cycle: number;
 }
 
 export interface StoreShape {

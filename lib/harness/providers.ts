@@ -63,19 +63,19 @@ export function parseStreamJsonOutput(raw: string): { output: string; success: b
     }
   }
 
-  const output = textParts.join("\n");
+  const output = textParts.join("\n").trim();
 
-  // Check result event for success/error
-  const resultEvent = events.find((e) => e.type === "result");
+  // Use the last result event if multiple are emitted.
+  const resultEvent = [...events].reverse().find((e) => e.type === "result");
   if (resultEvent) {
     if (resultEvent.subtype === "error" || resultEvent.is_error) {
       return {
-        output: output || resultEvent.result || "",
+        output: resultEvent.result || output || "",
         success: false,
         error: resultEvent.result || "Provider returned an error result",
       };
     }
-    const finalOutput = output || resultEvent.result || "";
+    const finalOutput = resultEvent.result || output || "";
     return { output: finalOutput, success: true, error: "" };
   }
 
@@ -96,6 +96,17 @@ interface CodexEvent {
   text?: string;
   message?: string;
   status?: string;
+  // Newer Codex CLI wraps events in an item envelope
+  item?: {
+    type?: string;
+    text?: string;
+    content?: string;
+    message?: string;
+    command?: string;
+    aggregated_output?: string;
+    exit_code?: number | null;
+    status?: string;
+  };
 }
 
 function parseCodexOutput(raw: string): { output: string; success: boolean; error: string } {
@@ -107,7 +118,24 @@ function parseCodexOutput(raw: string): { output: string; success: boolean; erro
   for (const line of lines) {
     try {
       const event = JSON.parse(line) as CodexEvent;
-      // Codex emits various event types — extract text content
+
+      // Newer format: {type: "item.completed", item: {type: "agent_message", text: "..."}}
+      if (event.item) {
+        const item = event.item;
+        if (item.type === "agent_message" && item.text) {
+          textParts.push(item.text);
+        } else if (item.type === "reasoning" && item.text) {
+          // skip reasoning blocks from artifact output
+        } else if (item.type === "command_execution" && item.aggregated_output) {
+          // command outputs are context, not the final artifact
+        } else if (item.type === "error") {
+          hasError = true;
+          errorMsg = item.message || item.text || "Codex returned an error";
+        }
+        continue;
+      }
+
+      // Legacy format: {type: "message", content: "..."}
       if (event.type === "message" && event.content) {
         textParts.push(event.content);
       } else if (event.type === "text" && event.text) {
@@ -148,7 +176,7 @@ const claudeProvider: ProviderInfo = {
   label: "Claude Code",
   binary: "claude",
   available: false,
-  defaultModel: "sonnet",
+  defaultModel: "opus",
   models: [
     { id: "sonnet", label: "Sonnet", thinkingLevels: [
       { id: "low", label: "Low" },
