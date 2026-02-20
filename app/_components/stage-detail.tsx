@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Clock, Copy } from "lucide-react";
 
 import { ExternalLink } from "lucide-react";
@@ -87,38 +87,142 @@ function CollapsibleSection({
   );
 }
 
-function formatLogLine(line: string): string {
-  try {
-    const event = JSON.parse(line) as {
+// ---------------------------------------------------------------------------
+// Log entry types
+// ---------------------------------------------------------------------------
+
+type LogEntry =
+  | { kind: "tool"; id: string; name: string; param: string; resultPreview: string | null; resultTotalLines: number; status: "pending" | "done" | "error" }
+  | { kind: "text"; preview: string }
+  | { kind: "system"; label: string }
+  | { kind: "result"; label: string }
+  | { kind: "raw"; text: string };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Strip workspace prefix, show last 2-3 path segments. */
+function shortenPath(fullPath: string): string {
+  // Match worktree pattern like `-cf-<hex>/` or generic long hex dir
+  const cfMatch = fullPath.match(/-cf-[0-9a-f]+\//i);
+  if (cfMatch) {
+    const afterCf = fullPath.slice(cfMatch.index! + cfMatch[0].length);
+    return afterCf || fullPath.split("/").slice(-2).join("/");
+  }
+  // Fallback: last 2 segments
+  const segments = fullPath.split("/").filter(Boolean);
+  return segments.length <= 2 ? fullPath : segments.slice(-2).join("/");
+}
+
+function truncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen) + "...";
+}
+
+/** Extract the key display parameter for a tool call. */
+function getToolDisplayParam(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case "Read":
+    case "Edit":
+    case "Write":
+      return typeof input.file_path === "string" ? shortenPath(input.file_path) : "";
+    case "Bash":
+      return typeof input.command === "string" ? truncate(input.command, 60) : "";
+    case "Glob":
+      return typeof input.pattern === "string" ? truncate(input.pattern, 60) : "";
+    case "Grep":
+      return typeof input.pattern === "string" ? truncate(input.pattern, 60) : "";
+    case "Task":
+      return typeof input.description === "string" ? truncate(input.description, 50) : "";
+    case "WebFetch":
+      return typeof input.url === "string" ? truncate(input.url, 60) : "";
+    case "WebSearch":
+      return typeof input.query === "string" ? truncate(input.query, 60) : "";
+    default:
+      return "";
+  }
+}
+
+/** Extract a short preview from a tool_result content block. */
+function extractResultPreview(
+  content: Array<{ type?: string; text?: string }> | string | undefined,
+): { preview: string; totalLines: number } {
+  let raw = "";
+  if (typeof content === "string") {
+    raw = content;
+  } else if (Array.isArray(content)) {
+    const textBlock = content.find((b) => b.type === "text" && b.text);
+    raw = textBlock?.text ?? "";
+  }
+  if (!raw) return { preview: "", totalLines: 0 };
+
+  const lines = raw.split("\n");
+  const totalLines = lines.length;
+  // Strip Read tool line-number prefixes like "     1→"
+  const cleaned = lines.slice(0, 3).map((l) => l.replace(/^\s*\d+[→→]\s?/, ""));
+  return { preview: cleaned.join("\n"), totalLines };
+}
+
+// ---------------------------------------------------------------------------
+// Log parser — correlates tool calls with results
+// ---------------------------------------------------------------------------
+
+interface StreamEvent {
+  type?: string;
+  subtype?: string;
+  hook_name?: string;
+  outcome?: string;
+  model?: string;
+  content?: string | Array<{ type?: string; text?: string }>;
+  text?: string;
+  status?: string;
+  message?: {
+    model?: string;
+    content?: Array<{
       type?: string;
-      subtype?: string;
-      hook_name?: string;
-      outcome?: string;
-      model?: string;
-      content?: string;
       text?: string;
-      status?: string;
-      message?: {
-        model?: string;
-        content?: Array<{ type?: string; text?: string; name?: string }>;
-      };
-      total_cost_usd?: number;
-      duration_ms?: number;
-      num_turns?: number;
-    };
+      name?: string;
+      id?: string;
+      input?: Record<string, unknown>;
+      tool_use_id?: string;
+      content?: Array<{ type?: string; text?: string }> | string;
+      is_error?: boolean;
+    }>;
+  };
+  total_cost_usd?: number;
+  duration_ms?: number;
+  num_turns?: number;
+  item?: Record<string, unknown>;
+}
+
+function parseLogEntries(rawContent: string): LogEntry[] {
+  const lines = rawContent.split("\n").filter((l) => l.trim());
+  const entries: LogEntry[] = [];
+  const toolMap = new Map<string, LogEntry & { kind: "tool" }>();
+
+  for (const line of lines) {
+    let event: StreamEvent;
+    try {
+      event = JSON.parse(line) as StreamEvent;
+    } catch {
+      // Non-JSON line — show raw
+      entries.push({ kind: "raw", text: line });
+      continue;
+    }
 
     // --- Claude / Gemini stream-json format ---
     if (event.type === "system") {
+      let label = "";
       if (event.subtype === "init") {
-        return `[init] ${event.model ?? "provider"} session started`;
+        label = `${event.model ?? "provider"} session started`;
+      } else if (event.subtype === "hook_started") {
+        label = `${event.hook_name ?? "hook"} ...`;
+      } else if (event.subtype === "hook_response") {
+        label = `${event.hook_name ?? "hook"} ${event.outcome ?? "done"}`;
       }
-      if (event.subtype === "hook_started") {
-        return `[hook] ${event.hook_name ?? "hook"} ...`;
-      }
-      if (event.subtype === "hook_response") {
-        return `[hook] ${event.hook_name ?? "hook"} ${event.outcome ?? "done"}`;
-      }
-      return "";
+      if (label) entries.push({ kind: "system", label });
+      continue;
     }
 
     if (event.type === "result") {
@@ -126,74 +230,161 @@ function formatLogLine(line: string): string {
       const cost = event.total_cost_usd ? ` ($${event.total_cost_usd.toFixed(3)})` : "";
       const dur = event.duration_ms ? ` ${(event.duration_ms / 1000).toFixed(1)}s` : "";
       const turns = event.num_turns ? ` ${event.num_turns} turns` : "";
-      return `[result] ${status}${dur}${turns}${cost}`;
+      entries.push({ kind: "result", label: `${status}${dur}${turns}${cost}` });
+      continue;
     }
 
     if (event.type === "assistant" && event.message?.content) {
-      const parts: string[] = [];
       for (const block of event.message.content) {
-        if (block.type === "text" && block.text) {
-          const preview = block.text.length > 200 ? `${block.text.slice(0, 200)}...` : block.text;
-          parts.push(`[text] ${preview}`);
-        } else if (block.type === "tool_use" && block.name) {
-          parts.push(`[tool] ${block.name}`);
+        if (block.type === "tool_use" && block.name && block.id) {
+          const param = getToolDisplayParam(block.name, (block.input ?? {}) as Record<string, unknown>);
+          const entry: LogEntry & { kind: "tool" } = {
+            kind: "tool",
+            id: block.id,
+            name: block.name,
+            param,
+            resultPreview: null,
+            resultTotalLines: 0,
+            status: "pending",
+          };
+          toolMap.set(block.id, entry);
+          entries.push(entry);
+        } else if (block.type === "text" && block.text) {
+          entries.push({ kind: "text", preview: truncate(block.text, 200) });
         }
+        // skip thinking blocks
       }
-      return parts.join("\n") || "";
+      continue;
     }
 
-    if (event.type === "user") {
-      return "[tool_result] ...";
+    if (event.type === "user" && event.message?.content) {
+      for (const block of event.message.content) {
+        if (block.type === "tool_result" && block.tool_use_id) {
+          const parent = toolMap.get(block.tool_use_id);
+          if (parent) {
+            parent.status = block.is_error ? "error" : "done";
+            const { preview, totalLines } = extractResultPreview(block.content);
+            parent.resultPreview = preview || null;
+            parent.resultTotalLines = totalLines;
+          }
+          // Don't push a new entry — result folds into existing tool entry
+        }
+      }
+      continue;
     }
 
     // --- Codex JSONL format (newer: item envelope) ---
     if (event.item) {
-      const item = event.item as Record<string, unknown>;
+      const item = event.item;
       if (item.type === "agent_message" && typeof item.text === "string") {
-        const preview = item.text.length > 200 ? `${item.text.slice(0, 200)}...` : item.text;
-        return `[text] ${preview}`;
-      }
-      if (item.type === "reasoning" && typeof item.text === "string") {
-        return `[thinking] ...`;
-      }
-      if (item.type === "command_execution" && typeof item.command === "string") {
+        entries.push({ kind: "text", preview: truncate(item.text as string, 200) });
+      } else if (item.type === "command_execution" && typeof item.command === "string") {
         const cmd = item.command as string;
-        const short = cmd.length > 120 ? `${cmd.slice(0, 120)}...` : cmd;
-        if (item.status === "completed") {
-          return `[cmd] ${short} → exit ${item.exit_code ?? "?"}`;
-        }
-        return `[cmd] ${short}`;
+        const output = typeof item.aggregated_output === "string" ? (item.aggregated_output as string) : "";
+        const isDone = item.status === "completed";
+        const exitInfo = isDone ? ` → exit ${item.exit_code ?? "?"}` : "";
+        const { preview, totalLines } = extractResultPreview(output);
+        entries.push({
+          kind: "tool",
+          id: `codex-${entries.length}`,
+          name: "Bash",
+          param: truncate(cmd, 60) + exitInfo,
+          resultPreview: preview || null,
+          resultTotalLines: totalLines,
+          status: isDone ? (item.exit_code === 0 ? "done" : "error") : "pending",
+        });
+      } else if (item.type === "error") {
+        entries.push({
+          kind: "system",
+          label: `error: ${(item.message as string) || (item.text as string) || "unknown error"}`,
+        });
       }
-      if (item.type === "error") {
-        return `[error] ${item.message || item.text || "unknown error"}`;
-      }
-      return "";
+      // skip reasoning blocks
+      continue;
     }
 
     // --- Codex JSONL format (legacy) ---
-    if (event.type === "message" && event.content) {
-      const preview = event.content.length > 200 ? `${event.content.slice(0, 200)}...` : event.content;
-      return `[text] ${preview}`;
+    if (event.type === "message" && typeof event.content === "string") {
+      entries.push({ kind: "text", preview: truncate(event.content, 200) });
+      continue;
     }
     if (event.type === "text" && event.text) {
-      const preview = event.text.length > 200 ? `${event.text.slice(0, 200)}...` : event.text;
-      return `[text] ${preview}`;
+      entries.push({ kind: "text", preview: truncate(event.text, 200) });
+      continue;
     }
     if (event.type === "error") {
-      return `[error] ${event.content || event.message || "unknown error"}`;
+      const msg = (typeof event.content === "string" ? event.content : "") || event.text || "unknown error";
+      entries.push({ kind: "system", label: `error: ${msg}` });
+      continue;
     }
 
     // Unknown JSON event — skip
-    return "";
-  } catch {
-    // Non-JSON line — show raw
-    return line;
+  }
+
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Log rendering components
+// ---------------------------------------------------------------------------
+
+function ToolEntryRow({ entry }: { entry: LogEntry & { kind: "tool" } }) {
+  const dot =
+    entry.status === "done" ? "●"
+    : entry.status === "error" ? "●"
+    : "○";
+  const dotClass =
+    entry.status === "done" ? "text-[var(--status-done)]"
+    : entry.status === "error" ? "text-[var(--status-failed)]"
+    : "text-[var(--status-running)]";
+
+  return (
+    <div>
+      <div>
+        <span className={dotClass}>{dot}</span>{" "}
+        <span className="text-green-300/90">{entry.name}</span>
+        {entry.param && <span className="text-green-400/60">({entry.param})</span>}
+      </div>
+      {entry.resultPreview && (
+        <div className="text-green-400/40 pl-3">
+          <span className="text-green-400/20">⎿ </span>
+          {entry.resultPreview.split("\n").map((line, i) => (
+            <span key={i}>
+              {i > 0 && <><br />{"  "}</>}
+              {line}
+            </span>
+          ))}
+          {entry.resultTotalLines > 3 && (
+            <><br />{"  "}… +{entry.resultTotalLines - 3} lines</>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogEntryRow({ entry }: { entry: LogEntry }) {
+  switch (entry.kind) {
+    case "tool":
+      return <ToolEntryRow entry={entry} />;
+    case "text":
+      return <div className="text-green-400/80">{entry.preview}</div>;
+    case "system":
+      return <div className="text-green-400/30">{entry.label}</div>;
+    case "result":
+      return <div className="text-green-400/80">✓ {entry.label}</div>;
+    case "raw":
+      return <div className="text-green-400/60">{entry.text}</div>;
   }
 }
 
+// ---------------------------------------------------------------------------
+// LiveOutput component
+// ---------------------------------------------------------------------------
+
 function LiveOutput({ runId, stageName, active }: { runId: string; stageName: string; active: boolean }) {
   const [content, setContent] = useState("");
-  const scrollRef = useRef<HTMLPreElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const hasFetchedOnce = useRef(false);
 
   useEffect(() => {
@@ -233,16 +424,7 @@ function LiveOutput({ runId, stageName, active }: { runId: string; stageName: st
     }
   }, [content, active]);
 
-  const formatted = content
-    ? content
-        .split("\n")
-        .filter((l) => l.trim())
-        .map(formatLogLine)
-        .filter((l) => l)
-        .join("\n")
-    : active
-      ? "Waiting for Claude to start streaming..."
-      : "";
+  const entries = useMemo(() => (content ? parseLogEntries(content) : []), [content]);
 
   // Don't render if completed with no log content
   if (!active && !content) return null;
@@ -268,15 +450,18 @@ function LiveOutput({ runId, stageName, active }: { runId: string; stageName: st
               <CopyButton text={content} />
             </div>
           )}
-          <pre
+          <div
             ref={scrollRef}
-            className={cn(
-              "text-xs whitespace-pre-wrap break-words font-mono leading-relaxed p-3",
-              active ? "text-green-400/90" : "text-green-400/60",
-            )}
+            className="flex flex-col gap-0.5 font-mono text-xs leading-snug p-3 whitespace-pre-wrap break-words"
           >
-            {formatted}
-          </pre>
+            {entries.length > 0
+              ? entries.map((entry, i) => <LogEntryRow key={i} entry={entry} />)
+              : active && (
+                  <span className="text-xs text-green-400/60">
+                    Waiting for Claude to start streaming...
+                  </span>
+                )}
+          </div>
         </div>
       </CollapsibleContent>
     </Collapsible>
