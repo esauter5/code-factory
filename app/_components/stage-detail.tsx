@@ -146,7 +146,31 @@ function formatLogLine(line: string): string {
       return "[tool_result] ...";
     }
 
-    // --- Codex JSONL format ---
+    // --- Codex JSONL format (newer: item envelope) ---
+    if (event.item) {
+      const item = event.item as Record<string, unknown>;
+      if (item.type === "agent_message" && typeof item.text === "string") {
+        const preview = item.text.length > 200 ? `${item.text.slice(0, 200)}...` : item.text;
+        return `[text] ${preview}`;
+      }
+      if (item.type === "reasoning" && typeof item.text === "string") {
+        return `[thinking] ...`;
+      }
+      if (item.type === "command_execution" && typeof item.command === "string") {
+        const cmd = item.command as string;
+        const short = cmd.length > 120 ? `${cmd.slice(0, 120)}...` : cmd;
+        if (item.status === "completed") {
+          return `[cmd] ${short} → exit ${item.exit_code ?? "?"}`;
+        }
+        return `[cmd] ${short}`;
+      }
+      if (item.type === "error") {
+        return `[error] ${item.message || item.text || "unknown error"}`;
+      }
+      return "";
+    }
+
+    // --- Codex JSONL format (legacy) ---
     if (event.type === "message" && event.content) {
       const preview = event.content.length > 200 ? `${event.content.slice(0, 200)}...` : event.content;
       return `[text] ${preview}`;
@@ -285,7 +309,9 @@ function extractPrUrl(stage: StageRun, prUrl?: string | null): string | null {
 }
 
 export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: string; prUrl?: string | null }) {
-  const latest = stage.attempts.at(-1);
+  const [selectedAttemptIdx, setSelectedAttemptIdx] = useState<number | null>(null);
+  const latest = stage.attempts.at(-1) ?? null;
+  const viewing = selectedAttemptIdx !== null ? stage.attempts[selectedAttemptIdx] ?? latest : latest;
   const detectedPrUrl = extractPrUrl(stage, prUrl);
 
   return (
@@ -303,14 +329,25 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
         </a>
       )}
 
-      {/* status + timing */}
+      {/* status + timing + attempt selector */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
           <StatusBadge status={stage.status} />
           {stage.attempts.length > 1 && (
-            <span className="text-[10px] text-muted-foreground">
-              {stage.attempts.length} attempts
-            </span>
+            <select
+              className="text-[10px] bg-muted rounded px-1.5 py-0.5 border text-foreground cursor-pointer"
+              value={selectedAttemptIdx ?? stage.attempts.length - 1}
+              onChange={(e) => {
+                const idx = Number(e.target.value);
+                setSelectedAttemptIdx(idx === stage.attempts.length - 1 ? null : idx);
+              }}
+            >
+              {stage.attempts.map((a, i) => (
+                <option key={a.attempt} value={i}>
+                  Attempt {a.attempt}{a.cycle ? ` (cycle ${a.cycle})` : ""}{i === stage.attempts.length - 1 ? " (latest)" : ""}
+                </option>
+              ))}
+            </select>
           )}
         </div>
         {stage.startedAt && (
@@ -326,31 +363,31 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
         <LiveOutput runId={runId} stageName={stage.name} active={stage.status === "running"} />
       )}
 
-      {/* content sections */}
+      {/* content sections — show selected attempt's data */}
       <div className="flex flex-col gap-1.5">
         <CollapsibleSection
           title="Prompt"
           defaultOpen={false}
-          text={latest?.prompt || "(no prompt)"}
+          text={viewing?.prompt || "(no prompt)"}
         />
 
         <CollapsibleSection
           title="Artifact Output"
           defaultOpen={true}
-          text={latest?.outputPreview || "(no output)"}
+          text={viewing?.outputPreview || "(no output)"}
         />
 
         <CollapsibleSection
           title="Logs"
           defaultOpen={false}
-          text={latest?.logsPreview || "(no logs)"}
+          text={viewing?.logsPreview || "(no logs)"}
         />
 
-        {(stage.lastError || latest?.error) && (
+        {(viewing?.error || stage.lastError) && (
           <CollapsibleSection
             title="Error"
             defaultOpen={true}
-            text={stage.lastError || latest?.error || "(none)"}
+            text={viewing?.error || stage.lastError || "(none)"}
           />
         )}
 
@@ -371,21 +408,28 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
               Attempt history
             </p>
             <div className="flex flex-col gap-1.5">
-              {stage.attempts.map((attempt) => (
-                <div
+              {stage.attempts.map((attempt, idx) => (
+                <button
+                  type="button"
                   key={attempt.attempt}
                   className={cn(
-                    "rounded-md border p-3 text-xs",
-                    attempt === latest
+                    "rounded-md border p-3 text-xs text-left transition-colors",
+                    (selectedAttemptIdx === null ? attempt === latest : idx === selectedAttemptIdx)
                       ? "border-primary/30 bg-muted/50"
-                      : "border-border",
+                      : "border-border hover:bg-muted/30",
                   )}
+                  onClick={() => setSelectedAttemptIdx(idx === stage.attempts.length - 1 ? null : idx)}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">
                         Attempt {attempt.attempt}
                       </span>
+                      {attempt.cycle && (
+                        <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                          cycle {attempt.cycle}
+                        </Badge>
+                      )}
                       {attempt === latest && (
                         <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
                           latest
@@ -403,7 +447,7 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
                       </span>
                     )}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>

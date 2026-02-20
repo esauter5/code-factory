@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Settings2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -40,8 +40,10 @@ export function StageSettingsPopover({
 }) {
   const [localTimeout, setLocalTimeout] = useState<string>("");
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
-  const hasOverride = override && (override.provider || override.model || override.thinkingLevel || override.timeoutMs);
+  const hasOverride = mounted && override && (override.provider || override.model || override.thinkingLevel || override.timeoutMs);
 
   const selectedProvider = override?.provider || INHERIT_VALUE;
   const providerData = providers.find((p) => p.id === selectedProvider);

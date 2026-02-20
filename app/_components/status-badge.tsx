@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-type Status = "queued" | "running" | "failed" | "done" | "skipped" | "needs_approval" | "blocked";
+type Status = "queued" | "running" | "failed" | "done" | "skipped" | "cancelled" | "needs_approval" | "blocked";
 
 const styleByStatus: Record<Status, string> = {
   running: "bg-[var(--status-running-soft)] text-[var(--status-running)] hover:bg-[var(--status-running-soft)]",
@@ -9,6 +9,7 @@ const styleByStatus: Record<Status, string> = {
   done: "bg-[var(--status-done-soft)] text-[var(--status-done)] hover:bg-[var(--status-done-soft)]",
   queued: "bg-[var(--status-queued-soft)] text-[var(--status-queued)] hover:bg-[var(--status-queued-soft)]",
   skipped: "bg-[var(--status-skipped-soft)] text-[var(--status-skipped)] hover:bg-[var(--status-skipped-soft)]",
+  cancelled: "bg-[var(--status-cancelled-soft)] text-[var(--status-cancelled)] hover:bg-[var(--status-cancelled-soft)]",
   needs_approval: "bg-amber-100 text-amber-800 hover:bg-amber-100",
   blocked: "bg-red-100 text-red-700 hover:bg-red-100",
 };

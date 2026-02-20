@@ -171,6 +171,54 @@ export function useRunActions(onSuccess: () => Promise<void>) {
     [onSuccess],
   );
 
+  const cancelRun = useCallback(
+    async (runId: string) => {
+      try {
+        setActionLoading(true);
+        setActionError("");
+        await apiPost<RunResponse>(`/api/runs/${runId}/actions/cancel`, {});
+        await onSuccess();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : "action failed");
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [onSuccess],
+  );
+
+  const archiveRun = useCallback(
+    async (runId: string) => {
+      try {
+        setActionLoading(true);
+        setActionError("");
+        await apiPost<RunResponse>(`/api/runs/${runId}/actions/archive`, {});
+        await onSuccess();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : "action failed");
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [onSuccess],
+  );
+
+  const unarchiveRun = useCallback(
+    async (runId: string) => {
+      try {
+        setActionLoading(true);
+        setActionError("");
+        await apiPost<RunResponse>(`/api/runs/${runId}/actions/unarchive`, {});
+        await onSuccess();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : "action failed");
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [onSuccess],
+  );
+
   const browseDirectory = useCallback(async (targetPath: string) => {
     const data = await apiGet<DirectoryBrowseResponse>(
       `/api/fs/directories?path=${encodeURIComponent(targetPath)}`,
@@ -188,6 +236,9 @@ export function useRunActions(onSuccess: () => Promise<void>) {
     editPrompt,
     skipStage,
     cleanWorkspace,
+    cancelRun,
+    archiveRun,
+    unarchiveRun,
     browseDirectory,
   };
 }

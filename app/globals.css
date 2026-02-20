@@ -36,6 +36,8 @@
   --status-queued-soft: #f5f5f5;
   --status-skipped: #4b5563;
   --status-skipped-soft: #f3f4f6;
+  --status-cancelled: #92400e;
+  --status-cancelled-soft: #fef3c7;
 
   /* Column backgrounds */
   --column-bg: oklch(0.975 0 0);
@@ -71,6 +73,8 @@
   --status-queued-soft: #262626;
   --status-skipped: #9ca3af;
   --status-skipped-soft: #1f2937;
+  --status-cancelled: #fbbf24;
+  --status-cancelled-soft: #422006;
 
   --column-bg: oklch(0.185 0 0);
 }

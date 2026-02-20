@@ -9,7 +9,8 @@ import { KanbanBoard } from "./_components/kanban-board";
 import { NewRunDialog } from "./_components/new-run-dialog";
 import { RepoManagementDialog } from "./_components/repo-management-dialog";
 import { RunDetailSheet } from "./_components/run-detail-sheet";
-import { TopBar } from "./_components/top-bar";
+import { RunsTable } from "./_components/runs-table";
+import { TopBar, type ViewMode } from "./_components/top-bar";
 import { getBoardStage, useRuns } from "./_hooks/use-runs";
 import { useRunActions } from "./_hooks/use-run-actions";
 import { useRepos } from "./_hooks/use-repos";
@@ -38,6 +39,9 @@ export default function Page() {
     editPrompt,
     skipStage,
     cleanWorkspace,
+    cancelRun,
+    archiveRun,
+    unarchiveRun,
     browseDirectory,
   } = useRunActions(refresh);
   const {
@@ -54,6 +58,10 @@ export default function Page() {
   const [selectedTemplateId, setSelectedTemplateId] = useState(DEFAULT_TEMPLATE_ID);
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
   const [detailStage, setDetailStage] = useState<string>("Plan");
+
+  // View mode and archive toggle
+  const [viewMode, setViewMode] = useState<ViewMode>("board");
+  const [showArchived, setShowArchived] = useState(false);
 
   // Run-level runner mode (lifted from new-run dialog for column chips)
   const [runnerMode, setRunnerMode] = useState<RunnerMode>("mock");
@@ -90,13 +98,19 @@ export default function Page() {
   }, []);
 
   const selectedTemplate = useMemo(() => getTemplateOrDefault(selectedTemplateId), [selectedTemplateId]);
-  const boardStageNames = useMemo(() => selectedTemplate.stages.map((s) => s.name), [selectedTemplate]);
+  const boardStageNames = useMemo(() => [...selectedTemplate.stages.map((s) => s.name), "Done"], [selectedTemplate]);
 
-  // Filter runs by selected workspace
+  // Filter runs by selected workspace and archive status
   const filteredRuns = useMemo(() => {
-    if (!selectedWorkspaceId) return runs;
-    return runs.filter((r) => r.repoId === selectedWorkspaceId);
-  }, [runs, selectedWorkspaceId]);
+    let result = runs;
+    if (selectedWorkspaceId) {
+      result = result.filter((r) => r.repoId === selectedWorkspaceId);
+    }
+    if (!showArchived) {
+      result = result.filter((r) => !r.archived);
+    }
+    return result;
+  }, [runs, selectedWorkspaceId, showArchived]);
 
   const filteredBoardColumns = useMemo(() => {
     const columns: Record<string, RunRecord[]> = {};
@@ -178,6 +192,10 @@ export default function Page() {
         onTemplateChange={setSelectedTemplateId}
         onNewRun={() => setNewRunOpen(true)}
         onManageRepos={() => setRepoDialogOpen(true)}
+        showArchived={showArchived}
+        onShowArchivedChange={setShowArchived}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
       />
 
       {combinedError && (
@@ -197,17 +215,25 @@ export default function Page() {
       )}
 
       <main className="flex-1 min-h-0 overflow-hidden md:overflow-x-auto p-1.5 md:p-2">
-        <KanbanBoard
-          stageNames={boardStageNames}
-          boardColumns={filteredBoardColumns}
-          repos={repos}
-          onCardClick={openRunDetail}
-          stageDefinitions={selectedTemplate.stages}
-          stageOverrides={stageOverrides}
-          onOverrideChange={handleOverrideChange}
-          providers={providers}
-          runnerMode={runnerMode}
-        />
+        {viewMode === "board" ? (
+          <KanbanBoard
+            stageNames={boardStageNames}
+            boardColumns={filteredBoardColumns}
+            repos={repos}
+            onCardClick={openRunDetail}
+            stageDefinitions={selectedTemplate.stages}
+            stageOverrides={stageOverrides}
+            onOverrideChange={handleOverrideChange}
+            providers={providers}
+            runnerMode={runnerMode}
+          />
+        ) : (
+          <RunsTable
+            runs={filteredRuns}
+            repos={repos}
+            onRowClick={openRunDetail}
+          />
+        )}
       </main>
 
       <NewRunDialog
@@ -233,6 +259,9 @@ export default function Page() {
         onEditPrompt={(id, stage, prompt) => void editPrompt(id, stage, prompt)}
         onSkipStage={(id, stage, reason) => void skipStage(id, stage, reason)}
         onCleanWorkspace={(id) => void cleanWorkspace(id)}
+        onCancelRun={(id) => void cancelRun(id)}
+        onArchiveRun={(id) => void archiveRun(id)}
+        onUnarchiveRun={(id) => void unarchiveRun(id)}
         actionLoading={actionLoading}
       />
 

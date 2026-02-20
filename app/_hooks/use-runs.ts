@@ -11,15 +11,16 @@ interface RunsResponse {
 const POLL_MS = 1800;
 
 function getBoardStage(run: RunRecord): string {
+  // Cancelled/done runs go to the Done column
+  if (run.status === "done" || run.status === "cancelled") return "Done";
   const running = run.stages.find((stage) => stage.status === "running");
   if (running) return running.name;
   const failed = run.stages.find((stage) => stage.status === "failed");
   if (failed) return failed.name;
   const queued = run.stages.find((stage) => stage.status === "queued");
   if (queued) return queued.name;
-  // Completed: return last stage name
-  const last = run.stages[run.stages.length - 1];
-  return last?.name ?? "Plan";
+  // All stages done but run status not yet "done" — show in Done
+  return "Done";
 }
 
 export { getBoardStage };

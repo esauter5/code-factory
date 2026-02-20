@@ -11,8 +11,39 @@ interface RouteParams {
 export async function POST(request: NextRequest, { params }: RouteParams): Promise<NextResponse> {
   const { runId, action } = await params;
   const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-  const stage = typeof body.stage === "string" ? body.stage : null;
   const orchestrator = getOrchestrator();
+
+  // Actions that don't require a stage parameter
+  if (action === "cancel") {
+    try {
+      const result = await orchestrator.cancelRun(runId);
+      return NextResponse.json({ run: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "action failed";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+  }
+  if (action === "archive") {
+    try {
+      const result = await orchestrator.archiveRun(runId);
+      return NextResponse.json({ run: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "action failed";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+  }
+  if (action === "unarchive") {
+    try {
+      const result = await orchestrator.unarchiveRun(runId);
+      return NextResponse.json({ run: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "action failed";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+  }
+
+  // Stage-based actions
+  const stage = typeof body.stage === "string" ? body.stage : null;
 
   if (!stage) {
     return NextResponse.json({ error: "valid stage is required" }, { status: 400 });

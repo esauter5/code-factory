@@ -2,6 +2,9 @@
 
 import { useMemo, useState } from "react";
 import {
+  Archive,
+  ArchiveRestore,
+  Ban,
   Clock,
   GitBranch,
   Pencil,
@@ -23,7 +26,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { RepoConfig, RunRecord } from "@/lib/harness/types";
+import type { RepoConfig, RunRecord, StageAttempt } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
 import { EditPromptDialog } from "./edit-prompt-dialog";
@@ -59,7 +62,119 @@ const statusDot: Record<string, string> = {
   running: "bg-[var(--status-running)] animate-pulse",
   failed: "bg-[var(--status-failed)]",
   queued: "bg-muted-foreground/25",
+  cancelled: "bg-[var(--status-cancelled)]",
 };
+
+interface CycleNode {
+  stageName: string;
+  status: "done" | "failed" | "running" | "skipped";
+}
+
+interface CycleInfo {
+  cycle: number;
+  nodes: CycleNode[];
+}
+
+function buildCycleTimeline(run: RunRecord): CycleInfo[] {
+  // Collect all attempts across all stages, group by cycle
+  const cycleMap = new Map<number, { stageName: string; attempt: StageAttempt }[]>();
+
+  for (const stage of run.stages) {
+    for (const attempt of stage.attempts) {
+      const cycle = attempt.cycle || 1;
+      if (!cycleMap.has(cycle)) cycleMap.set(cycle, []);
+      cycleMap.get(cycle)!.push({ stageName: stage.name, attempt });
+    }
+  }
+
+  const cycles: CycleInfo[] = [];
+  const sortedKeys = [...cycleMap.keys()].sort((a, b) => a - b);
+
+  for (const cycleNum of sortedKeys) {
+    const entries = cycleMap.get(cycleNum)!;
+    // Deduplicate stages (take the last attempt per stage in this cycle)
+    const stageMap = new Map<string, StageAttempt>();
+    for (const { stageName, attempt } of entries) {
+      stageMap.set(stageName, attempt);
+    }
+    const nodes: CycleNode[] = [];
+    // Preserve original stage order
+    for (const stage of run.stages) {
+      const attempt = stageMap.get(stage.name);
+      if (attempt) {
+        nodes.push({
+          stageName: stage.name,
+          status: attempt.status === "running" ? "running" : attempt.status,
+        });
+      }
+    }
+    if (nodes.length > 0) {
+      cycles.push({ cycle: cycleNum, nodes });
+    }
+  }
+
+  return cycles;
+}
+
+const timelineStatusIcon: Record<string, string> = {
+  done: "text-[var(--status-done)]",
+  failed: "text-[var(--status-failed)]",
+  running: "text-[var(--status-running)]",
+  skipped: "text-[var(--status-skipped)]",
+};
+
+function CycleTimeline({
+  cycles,
+  onSelectStage,
+}: {
+  cycles: CycleInfo[];
+  onSelectStage: (stageName: string) => void;
+}) {
+  if (cycles.length <= 1) return null;
+
+  return (
+    <div className="flex flex-col gap-1 px-1 py-1.5">
+      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">
+        Pipeline Journey
+      </p>
+      {cycles.map((cycle) => (
+        <div key={cycle.cycle} className="flex items-center gap-1 text-[10px]">
+          <span className="text-muted-foreground font-mono w-14 shrink-0">
+            Cycle {cycle.cycle}:
+          </span>
+          <div className="flex items-center gap-0.5 flex-wrap">
+            {cycle.nodes.map((node, i) => (
+              <span key={`${cycle.cycle}-${node.stageName}`} className="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  className={cn(
+                    "hover:underline cursor-pointer font-medium",
+                    timelineStatusIcon[node.status],
+                  )}
+                  onClick={() => onSelectStage(node.stageName)}
+                >
+                  {node.stageName}
+                  {node.status === "done" && " \u2713"}
+                  {node.status === "failed" && " \u2717"}
+                  {node.status === "running" && " ..."}
+                </button>
+                {i < cycle.nodes.length - 1 && (
+                  <span className="text-muted-foreground/50 mx-0.5">{"\u2192"}</span>
+                )}
+              </span>
+            ))}
+            {/* Show Done at end if all passed in this cycle */}
+            {cycle.nodes.length > 0 && cycle.nodes.every((n) => n.status === "done") && (
+              <span className="text-muted-foreground/50 mx-0.5">
+                {"\u2192"} <span className="text-[var(--status-done)] font-medium">Done</span>
+              </span>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function RunDetailSheet({
   run,
@@ -73,6 +188,9 @@ export function RunDetailSheet({
   onEditPrompt,
   onSkipStage,
   onCleanWorkspace,
+  onCancelRun,
+  onArchiveRun,
+  onUnarchiveRun,
   actionLoading,
 }: {
   run: RunRecord | null;
@@ -86,6 +204,9 @@ export function RunDetailSheet({
   onEditPrompt: (runId: string, stage: string, prompt: string) => void;
   onSkipStage: (runId: string, stage: string, reason: string) => void;
   onCleanWorkspace: (runId: string) => void;
+  onCancelRun: (runId: string) => void;
+  onArchiveRun: (runId: string) => void;
+  onUnarchiveRun: (runId: string) => void;
   actionLoading: boolean;
 }) {
   const [editPromptOpen, setEditPromptOpen] = useState(false);
@@ -106,13 +227,16 @@ export function RunDetailSheet({
     return repos.find((r) => r.id === run.repoId)?.name ?? null;
   }, [run, repos]);
 
+  const cycleTimeline = useMemo(() => (run ? buildCycleTimeline(run) : []), [run]);
+
   if (!run) return null;
 
   const isRunning = run.status === "running";
+  const isCancelled = run.status === "cancelled";
   const stageCount = run.stages.filter(
     (s) => s.status === "done" || s.status === "skipped",
   ).length;
-  const hasActiveWorktree = run.worktree !== null && run.worktree.status === "ready";
+  const hasActiveWorktree = run.worktree != null && run.worktree.status === "ready";
   const canClean = hasActiveWorktree && !isRunning;
 
   // Determine if the selected stage has a PR URL
@@ -167,7 +291,7 @@ export function RunDetailSheet({
               )}
               <span className="inline-flex items-center gap-1">
                 <Clock className="h-3 w-3" />
-                {elapsed(run.createdAt, run.status === "done" || run.status === "failed" ? run.updatedAt : null)}
+                {elapsed(run.createdAt, run.status === "done" || run.status === "failed" || run.status === "cancelled" ? run.updatedAt : null)}
               </span>
               <span>{stageCount}/{run.stages.length} stages</span>
             </div>
@@ -200,6 +324,9 @@ export function RunDetailSheet({
                 );
               })}
             </div>
+
+            {/* cycle timeline — only shown when multiple cycles exist */}
+            <CycleTimeline cycles={cycleTimeline} onSelectStage={onTabChange} />
           </SheetHeader>
 
           <Separator />
@@ -243,14 +370,14 @@ export function RunDetailSheet({
           <Separator />
 
           {/* -- Action bar -- */}
-          <div className="flex items-center gap-2 px-3 md:px-5 py-3 shrink-0 bg-muted/30">
+          <div className="flex flex-wrap items-center gap-2 px-3 md:px-5 py-3 shrink-0 bg-muted/30">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="outline"
                   size="sm"
                   className="h-8 text-xs gap-1.5"
-                  disabled={isRunning || actionLoading}
+                  disabled={isRunning || isCancelled || actionLoading}
                   onClick={() => onRetryStage(run.id, activeTab)}
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
@@ -266,7 +393,7 @@ export function RunDetailSheet({
                   variant="outline"
                   size="sm"
                   className="h-8 text-xs gap-1.5"
-                  disabled={isRunning || actionLoading}
+                  disabled={isRunning || isCancelled || actionLoading}
                   onClick={() => onRetryFrom(run.id, activeTab)}
                 >
                   <Play className="h-3.5 w-3.5" />
@@ -282,7 +409,7 @@ export function RunDetailSheet({
                   variant="outline"
                   size="sm"
                   className="h-8 text-xs gap-1.5"
-                  disabled={isRunning || actionLoading}
+                  disabled={isRunning || isCancelled || actionLoading}
                   onClick={() => setEditPromptOpen(true)}
                 >
                   <Pencil className="h-3.5 w-3.5" />
@@ -312,13 +439,65 @@ export function RunDetailSheet({
               </Tooltip>
             )}
 
+            {run.archived ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    disabled={actionLoading}
+                    onClick={() => onUnarchiveRun(run.id)}
+                  >
+                    <ArchiveRestore className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Unarchive</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Restore this run from archive</TooltipContent>
+              </Tooltip>
+            ) : (run.status === "done" || run.status === "failed" || run.status === "cancelled") && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    disabled={actionLoading}
+                    onClick={() => onArchiveRun(run.id)}
+                  >
+                    <Archive className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Archive</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Hide this run from the board</TooltipContent>
+              </Tooltip>
+            )}
+
+            {(run.status === "failed" || run.status === "queued") && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5 text-[var(--status-cancelled)]"
+                    disabled={isRunning || actionLoading}
+                    onClick={() => onCancelRun(run.id)}
+                  >
+                    <Ban className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Cancel</span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Abandon this run</TooltipContent>
+              </Tooltip>
+            )}
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="destructive"
                   size="sm"
                   className="h-8 text-xs gap-1.5"
-                  disabled={isRunning || actionLoading}
+                  disabled={isRunning || isCancelled || actionLoading}
                   onClick={() => setSkipStageOpen(true)}
                 >
                   <SkipForward className="h-3.5 w-3.5" />
