@@ -442,6 +442,12 @@ export class HarnessOrchestrator {
           outputPreview: "",
           logsPreview: "",
           error: "",
+          costUsd: null,
+          inputTokens: null,
+          outputTokens: null,
+          durationMs: null,
+          providerUsed: null,
+          modelUsed: null,
         };
         next.status = "running";
         next.startedAt = nowIso();
@@ -458,9 +464,9 @@ export class HarnessOrchestrator {
         });
         await this.store.saveRun(run);
 
-        const result = await this.executeStage(run, next.name, prompt, attemptDir);
-        await this.applyStageResult(runId, next.name, result);
-        if (!result.success) {
+        const stageResult = await this.executeStage(run, next.name, prompt, attemptDir);
+        await this.applyStageResult(runId, next.name, stageResult.result, stageResult.providerUsed, stageResult.modelUsed);
+        if (!stageResult.result.success) {
           const reverted = await this.tryAutoRevert(runId, next.name);
           if (reverted) continue;
           return;
@@ -635,7 +641,12 @@ export class HarnessOrchestrator {
     return true;
   }
 
-  private async executeStage(run: RunRecord, stageName: string, prompt: string, logDir?: string): Promise<RunnerResult> {
+  private async executeStage(
+    run: RunRecord,
+    stageName: string,
+    prompt: string,
+    logDir?: string,
+  ): Promise<{ result: RunnerResult; providerUsed: string | null; modelUsed: string | null }> {
     const stageDef = this.getStageDefinition(run, stageName);
     const timeoutMs = stageDef?.timeoutMs ?? 120_000;
 
@@ -644,13 +655,16 @@ export class HarnessOrchestrator {
       const command = stageDef.templateOrCommand === "$testCommand"
         ? run.testCommand
         : stageDef.templateOrCommand;
-      return runTestCommand(command, run.repoPath, timeoutMs, logDir);
+      return { result: await runTestCommand(command, run.repoPath, timeoutMs, logDir), providerUsed: null, modelUsed: null };
     }
 
-    // TEMP: force claude with default model + medium thinking
-    const providerId = run.runnerMode === "mock" ? "mock" : "claude";
-    const model = undefined;
-    const thinkingLevel = "medium";
+    // Resolve provider config: stage-level override → run-level config → runner mode
+    const providerId = run.runnerMode === "mock"
+      ? "mock"
+      : (stageDef?.provider ?? run.runnerMode);
+    const model = stageDef?.model ?? run.model ?? undefined;
+    const thinkingLevel = stageDef?.thinkingLevel ?? run.thinkingLevel ?? undefined;
+    console.log(`[orchestrator] executeStage ${stageName}: provider=${providerId} model=${model} thinking=${thinkingLevel} (runnerMode=${run.runnerMode}, stageDef.provider=${stageDef?.provider})`);
 
     // Mock or provider-based execution
     let result: RunnerResult;
@@ -659,7 +673,7 @@ export class HarnessOrchestrator {
     } else {
       const provider = getProvider(providerId);
       if (!provider) {
-        return { success: false, output: "", logs: "", error: `Unknown provider: ${providerId}` };
+        return { result: { success: false, output: "", logs: "", error: `Unknown provider: ${providerId}` }, providerUsed: providerId, modelUsed: model ?? null };
       }
       result = await runProviderPrompt(provider, prompt, run.repoPath, timeoutMs, model, thinkingLevel, logDir);
     }
@@ -671,10 +685,9 @@ export class HarnessOrchestrator {
       // failIfOutputContains check
       if (failIfOutputContains && result.success && result.output.toUpperCase().includes(failIfOutputContains.toUpperCase())) {
         return {
-          success: false,
-          output: result.output,
-          logs: result.logs,
-          error: `${stageName} found blocker findings`,
+          result: { ...result, success: false, error: `${stageName} found blocker findings` },
+          providerUsed: providerId,
+          modelUsed: model ?? null,
         };
       }
 
@@ -684,10 +697,9 @@ export class HarnessOrchestrator {
         const matched = failIfOutputContainsAny.find((keyword) => upperOutput.includes(keyword.toUpperCase()));
         if (matched) {
           return {
-            success: false,
-            output: result.output,
-            logs: result.logs,
-            error: `${stageName} found ${matched.replace(":", "").toLowerCase()} findings`,
+            result: { ...result, success: false, error: `${stageName} found ${matched.replace(":", "").toLowerCase()} findings` },
+            providerUsed: providerId,
+            modelUsed: model ?? null,
           };
         }
       }
@@ -700,26 +712,32 @@ export class HarnessOrchestrator {
             run.prUrl = urlMatch[0];
             await this.store.saveRun(run);
           }
-          return result;
+          return { result, providerUsed: providerId, modelUsed: model ?? null };
         }
         // Simulated PR URL fallback
         const suffix = run.id.split("-")[0];
         return {
-          success: true,
-          output: `${result.output}\n\nsimulated_pr_url: https://example.com/pr/${suffix}`,
-          logs: result.logs,
-          error: "",
+          result: {
+            success: true,
+            output: `${result.output}\n\nsimulated_pr_url: https://example.com/pr/${suffix}`,
+            logs: result.logs,
+            error: "",
+          },
+          providerUsed: providerId,
+          modelUsed: model ?? null,
         };
       }
     }
 
-    return result;
+    return { result, providerUsed: providerId, modelUsed: model ?? null };
   }
 
   private async applyStageResult(
     runId: string,
     stageName: string,
     result: RunnerResult,
+    providerUsed: string | null,
+    modelUsed: string | null,
   ): Promise<void> {
     const run = await this.requireRun(runId);
     const stage = run.stages.find((item) => item.name === stageName);
@@ -747,6 +765,12 @@ export class HarnessOrchestrator {
     attempt.outputPreview = result.output;
     attempt.logsPreview = result.logs;
     attempt.error = result.error;
+    attempt.costUsd = result.costUsd ?? null;
+    attempt.inputTokens = result.inputTokens ?? null;
+    attempt.outputTokens = result.outputTokens ?? null;
+    attempt.durationMs = result.durationMs ?? null;
+    attempt.providerUsed = providerUsed;
+    attempt.modelUsed = modelUsed;
 
     await this.appendProgress(runId, stageName, attempt.attempt, result);
 

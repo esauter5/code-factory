@@ -22,6 +22,12 @@ export interface StageAttempt {
   outputPreview: string;
   logsPreview: string;
   error: string;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number | null;
+  providerUsed: string | null;
+  modelUsed: string | null;
 }
 
 export interface StageRun {
@@ -96,6 +102,10 @@ export interface RunnerResult {
   output: string;
   logs: string;
   error: string;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  durationMs?: number;
 }
 
 export interface StageOverride {

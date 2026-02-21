@@ -11,6 +11,16 @@ export interface ProviderModel {
   thinkingLevels: ProviderThinkingLevel[];
 }
 
+export interface ParsedProviderOutput {
+  output: string;
+  success: boolean;
+  error: string;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  durationMs?: number;
+}
+
 export interface ProviderInfo {
   id: string;
   label: string;
@@ -20,7 +30,7 @@ export interface ProviderInfo {
   models: ProviderModel[];
   buildArgs(prompt: string, model?: string, thinkingLevel?: string): string[];
   buildEnv(thinkingLevel?: string): Record<string, string>;
-  parseOutput(raw: string): { output: string; success: boolean; error: string };
+  parseOutput(raw: string): ParsedProviderOutput;
 }
 
 // ---------------------------------------------------------------------------
@@ -39,7 +49,7 @@ interface StreamJsonEvent {
   is_error?: boolean;
 }
 
-export function parseStreamJsonOutput(raw: string): { output: string; success: boolean; error: string } {
+export function parseStreamJsonOutput(raw: string): ParsedProviderOutput {
   const lines = raw.split("\n").filter((l) => l.trim());
   const events: StreamJsonEvent[] = [];
 
@@ -67,16 +77,23 @@ export function parseStreamJsonOutput(raw: string): { output: string; success: b
 
   // Use the last result event if multiple are emitted.
   const resultEvent = [...events].reverse().find((e) => e.type === "result");
+
+  // Extract metadata from result event
+  const costUsd = resultEvent?.total_cost_usd;
+  const durationMs = resultEvent?.duration_ms;
+
   if (resultEvent) {
     if (resultEvent.subtype === "error" || resultEvent.is_error) {
       return {
         output: resultEvent.result || output || "",
         success: false,
         error: resultEvent.result || "Provider returned an error result",
+        costUsd,
+        durationMs,
       };
     }
     const finalOutput = resultEvent.result || output || "";
-    return { output: finalOutput, success: true, error: "" };
+    return { output: finalOutput, success: true, error: "", costUsd, durationMs };
   }
 
   if (output.length > 0) {
@@ -96,6 +113,12 @@ interface CodexEvent {
   text?: string;
   message?: string;
   status?: string;
+  // Token usage from turn.completed events
+  usage?: {
+    input_tokens?: number;
+    cached_input_tokens?: number;
+    output_tokens?: number;
+  };
   // Newer Codex CLI wraps events in an item envelope
   item?: {
     type?: string;
@@ -109,15 +132,33 @@ interface CodexEvent {
   };
 }
 
-function parseCodexOutput(raw: string): { output: string; success: boolean; error: string } {
+function parseCodexOutput(raw: string): ParsedProviderOutput {
   const lines = raw.split("\n").filter((l) => l.trim());
   const textParts: string[] = [];
   let hasError = false;
   let errorMsg = "";
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
 
   for (const line of lines) {
     try {
       const event = JSON.parse(line) as CodexEvent;
+
+      // Extract token counts from turn.completed events
+      if (event.type === "turn.completed" && event.usage) {
+        totalInputTokens += event.usage.input_tokens ?? 0;
+        totalOutputTokens += event.usage.output_tokens ?? 0;
+        continue;
+      }
+
+      // Skip lifecycle events that don't carry content
+      if (event.type === "thread.started" || event.type === "turn.started" || event.type === "turn.failed") {
+        if (event.type === "turn.failed") {
+          hasError = true;
+          errorMsg = event.message || "Codex turn failed";
+        }
+        continue;
+      }
 
       // Newer format: {type: "item.completed", item: {type: "agent_message", text: "..."}}
       if (event.item) {
@@ -155,16 +196,18 @@ function parseCodexOutput(raw: string): { output: string; success: boolean; erro
   }
 
   const output = textParts.join("\n");
+  const inputTokens = totalInputTokens > 0 ? totalInputTokens : undefined;
+  const outputTokens = totalOutputTokens > 0 ? totalOutputTokens : undefined;
 
   if (hasError && !output) {
-    return { output: "", success: false, error: errorMsg };
+    return { output: "", success: false, error: errorMsg, inputTokens, outputTokens };
   }
 
   if (output.length > 0) {
-    return { output, success: !hasError, error: hasError ? errorMsg : "" };
+    return { output, success: !hasError, error: hasError ? errorMsg : "", inputTokens, outputTokens };
   }
 
-  return { output: "", success: false, error: "No output from Codex" };
+  return { output: "", success: false, error: "No output from Codex", inputTokens, outputTokens };
 }
 
 // ---------------------------------------------------------------------------
