@@ -34,7 +34,7 @@ export interface ProviderInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Shared stream-json parser (Claude & Gemini)
+// Shared stream-json parser (Claude)
 // ---------------------------------------------------------------------------
 
 interface StreamJsonEvent {
@@ -287,38 +287,11 @@ const codexProvider: ProviderInfo = {
   parseOutput: parseCodexOutput,
 };
 
-const geminiProvider: ProviderInfo = {
-  id: "gemini",
-  label: "Gemini",
-  binary: "gemini",
-  available: false,
-  defaultModel: "gemini-2.5-pro",
-  models: [
-    // Gemini CLI configures thinking via ~/.gemini/settings.json, not CLI flags.
-    // No way to pass per-run thinking level as an argument, so we expose none.
-    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", thinkingLevels: [] },
-    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", thinkingLevels: [] },
-    { id: "gemini-3-pro-preview", label: "Gemini 3 Pro Preview", thinkingLevels: [] },
-  ],
-  buildArgs(prompt: string, model?: string): string[] {
-    const args = ["-p", "--output-format", "stream-json"];
-    if (model) {
-      args.push("--model", model);
-    }
-    args.push(prompt);
-    return args;
-  },
-  buildEnv(): Record<string, string> {
-    return {};
-  },
-  parseOutput: parseStreamJsonOutput,
-};
-
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
-const ALL_PROVIDERS: ProviderInfo[] = [claudeProvider, codexProvider, geminiProvider];
+const ALL_PROVIDERS: ProviderInfo[] = [claudeProvider, codexProvider];
 
 function whichBinary(binary: string): Promise<boolean> {
   return new Promise((resolve) => {

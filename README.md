@@ -7,7 +7,7 @@ A local-first control plane for running AI coding agents through structured SDLC
 ## Features
 
 - **Pipeline templates** — Feature, Bug Fix, Refactor, Docs, and Review workflows with pre-configured stage sequences
-- **Multi-provider support** — Claude, Codex, and Gemini (auto-detected from your local CLI installs), plus a mock mode that works with zero setup
+- **Multi-provider support** — Claude and Codex (auto-detected from your local CLI installs), plus a mock mode that works with zero setup
 - **Kanban board UI** — Runs flow through columns as stages complete, with real-time progress updates
 - **Stage controls** — Retry a stage, retry from a stage, edit the prompt and rerun, or skip with a reason
 - **Stage detail drawer** — View the full prompt, output artifact, streaming logs, and errors for every attempt
@@ -46,7 +46,6 @@ To use actual AI agents instead of mock mode, install and authenticate the CLI f
 |----------|-----|-------|
 | Claude | `claude` | [Install Claude Code](https://docs.anthropic.com/en/docs/claude-code) and sign in |
 | Codex | `codex` | [Install Codex CLI](https://github.com/openai/codex) and authenticate |
-| Gemini | `gemini` | [Install Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate |
 
 Code Factory auto-detects which CLIs are available on your system and shows them in the runner mode dropdown when creating a run.
 
@@ -70,7 +69,7 @@ app/
   _hooks/                   # Client hooks (polling, actions, repo CRUD)
 lib/harness/
   orchestrator.ts           # Execution engine — drives stages sequentially
-  providers.ts              # CLI abstraction for Claude, Codex, Gemini
+  providers.ts              # CLI abstraction for Claude and Codex
   pipeline-templates.ts     # Built-in template definitions
   runners.ts                # Stage execution handlers
   prompts.ts                # Prompt template loading and variable rendering

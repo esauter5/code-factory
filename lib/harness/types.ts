@@ -5,7 +5,7 @@ export const DEFAULT_STAGE_ORDER = ["Plan", "Implement", "Verify", "Test", "PR"]
 export const STAGE_ORDER = DEFAULT_STAGE_ORDER;
 
 export type StageName = string;
-export type RunnerMode = "mock" | "claude" | "codex" | "gemini";
+export type RunnerMode = "mock" | "claude" | "codex";
 export type PrMode = "simulate" | "create";
 export type RunStatus = "queued" | "running" | "failed" | "done" | "cancelled";
 export type StageStatus = "queued" | "running" | "failed" | "done" | "skipped";
