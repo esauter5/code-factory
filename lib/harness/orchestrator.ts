@@ -2,7 +2,7 @@ import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { StageDefinition } from "@/lib/harness/pipeline-templates";
-import { getTemplateOrDefault } from "@/lib/harness/pipeline-templates";
+import { getTemplateOrDefault, stageRequiresAgentBrowser } from "@/lib/harness/pipeline-templates";
 import { buildRepoContext, latestOutput, loadStageTemplate, renderTemplate } from "@/lib/harness/prompts";
 import { getProvider } from "@/lib/harness/providers";
 import { runMockStage, runProviderPrompt, runTestCommand } from "@/lib/harness/runners";
@@ -19,6 +19,11 @@ import type {
   StageRun,
 } from "@/lib/harness/types";
 import { provisionWorktree, teardownWorktree } from "@/lib/harness/workspace-manager";
+import { detectRuntimeCapabilities } from "@/lib/harness/capabilities";
+
+const DEFAULT_APP_BASE_URL = "http://127.0.0.1:3000";
+const DEFAULT_APP_START_COMMAND = "pnpm dev";
+const DEFAULT_APP_READY_PATTERN = "ready";
 
 export interface CreateRunInput {
   ticket: string;
@@ -57,9 +62,32 @@ function appendEvent(run: RunRecord, event: Omit<RunEvent, "timestamp">): void {
   });
 }
 
+function parseStatusDeclaration(output: string): "done" | "retry" | "failed" | null {
+  const match = output.match(/(?:^|\n)\s*STATUS:\s*(done|retry|failed)\s*(?:\n|$)/i);
+  if (!match) return null;
+  return match[1].toLowerCase() as "done" | "retry" | "failed";
+}
+
+function hasVerifyBrowserBlockVerdict(output: string): boolean {
+  if (!/(?:^|\n)\s*##\s*Verdict\b/i.test(output)) return false;
+  return /(?:^|\n)\s*-\s*block\s*(?:\n|$)/i.test(output);
+}
+
+/**
+ * Shared active-run set that survives hot reloads. Without this, a hot reload
+ * creates a new orchestrator with a fresh `active` set while the old
+ * orchestrator's `executeLoop` is still running — allowing a second loop to
+ * start for the same run and causing stages to execute concurrently.
+ */
+const globalForActive = globalThis as { __harness_active_runs__?: Set<string> };
+if (!globalForActive.__harness_active_runs__) {
+  globalForActive.__harness_active_runs__ = new Set<string>();
+}
+const sharedActiveRuns: Set<string> = globalForActive.__harness_active_runs__;
+
 export class HarnessOrchestrator {
   private store: JsonRunStore;
-  private active = new Set<string>();
+  private active: Set<string> = sharedActiveRuns;
 
   constructor(store: JsonRunStore) {
     this.store = store;
@@ -120,20 +148,9 @@ export class HarnessOrchestrator {
     let worktree: RunRecord["worktree"] = null;
     let repo: RepoConfig | null = null;
 
-    if (input.repoId) {
-      repo = await this.store.getRepo(input.repoId);
-      if (!repo) {
-        throw new Error("repo not found");
-      }
-      repoId = repo.id;
-      const worktreeInfo = await provisionWorktree(repo, runId);
-      worktree = worktreeInfo;
-      repoPath = worktreeInfo.worktreePath;
-    }
-
     const template = getTemplateOrDefault(input.templateId);
 
-    // Merge per-stage overrides into template stages before snapshotting
+    // Merge per-stage overrides into template stages before snapshotting.
     const mergedStages = template.stages.map((def) => {
       const ov = input.stageOverrides?.[def.name];
       if (!ov) return def;
@@ -145,6 +162,30 @@ export class HarnessOrchestrator {
         ...(ov.timeoutMs ? { timeoutMs: ov.timeoutMs } : {}),
       };
     });
+
+    if (mergedStages.some(stageRequiresAgentBrowser)) {
+      const capabilities = await detectRuntimeCapabilities();
+      if (!capabilities.agentBrowser.available) {
+        throw new Error(
+          [
+            "This template requires agent-browser, but it is not installed.",
+            `Install: ${capabilities.agentBrowser.installCommand}`,
+            `Setup: ${capabilities.agentBrowser.setupCommand}`,
+          ].join(" "),
+        );
+      }
+    }
+
+    if (input.repoId) {
+      repo = await this.store.getRepo(input.repoId);
+      if (!repo) {
+        throw new Error("repo not found");
+      }
+      repoId = repo.id;
+      const worktreeInfo = await provisionWorktree(repo, runId);
+      worktree = worktreeInfo;
+      repoPath = worktreeInfo.worktreePath;
+    }
 
     const run: RunRecord = {
       id: runId,
@@ -427,7 +468,7 @@ export class HarnessOrchestrator {
         const isShellCommand = stageDef?.executionType === "shell-command";
         const prompt = isShellCommand
           ? (stageDef?.templateOrCommand === "$testCommand" ? run.testCommand : stageDef?.templateOrCommand ?? "")
-          : (next.promptOverride ?? (await this.buildPrompt(run, next.name)));
+          : (next.promptOverride ?? (await this.buildPrompt(run, next.name, attemptDir)));
         await writeFile(path.join(attemptDir, "prompt.txt"), prompt, "utf8");
 
         const attempt: StageAttempt = {
@@ -477,10 +518,17 @@ export class HarnessOrchestrator {
     }
   }
 
-  private async buildPrompt(run: RunRecord, stageName: string): Promise<string> {
+  private async buildPrompt(run: RunRecord, stageName: string, attemptDir: string): Promise<string> {
     const stageDef = this.getStageDefinition(run, stageName);
     const templateName = stageDef?.templateOrCommand ?? stageName.toLowerCase();
-    const template = await loadStageTemplate(templateName);
+    const [template, repo, capabilities] = await Promise.all([
+      loadStageTemplate(templateName),
+      this.resolveRunRepo(run),
+      detectRuntimeCapabilities(),
+    ]);
+    const appBaseUrl = repo?.appBaseUrl?.trim() || DEFAULT_APP_BASE_URL;
+    const appStartCommand = repo?.appStartCommand?.trim() || DEFAULT_APP_START_COMMAND;
+    const appReadyPattern = repo?.appReadyPattern?.trim() || DEFAULT_APP_READY_PATTERN;
 
     // Build dynamic variable map from all prior stages
     const vars: Record<string, string> = {
@@ -492,6 +540,13 @@ export class HarnessOrchestrator {
       feedback: this.buildFeedback(run, stageName),
       pr_instructions: this.buildPrInstructions(run),
       pr_url: run.prUrl ?? "",
+      app_base_url: appBaseUrl,
+      app_start_command: appStartCommand,
+      app_ready_pattern: appReadyPattern,
+      attempt_dir: attemptDir,
+      agent_browser_available: capabilities.agentBrowser.available ? "true" : "false",
+      agent_browser_install_command: capabilities.agentBrowser.installCommand,
+      agent_browser_setup_command: capabilities.agentBrowser.setupCommand,
     };
 
     // Inject outputs from all prior stages as {{<name_lowercase>_artifact}}
@@ -650,6 +705,26 @@ export class HarnessOrchestrator {
     const stageDef = this.getStageDefinition(run, stageName);
     const timeoutMs = stageDef?.timeoutMs ?? 120_000;
 
+    if (stageDef?.requiresAgentBrowser) {
+      const capabilities = await detectRuntimeCapabilities();
+      if (!capabilities.agentBrowser.available) {
+        return {
+          result: {
+            success: false,
+            output: "",
+            logs: "",
+            error: [
+              `${stageName} requires agent-browser, but it is not installed.`,
+              `Install: ${capabilities.agentBrowser.installCommand}`,
+              `Setup: ${capabilities.agentBrowser.setupCommand}`,
+            ].join(" "),
+          },
+          providerUsed: null,
+          modelUsed: null,
+        };
+      }
+    }
+
     // Shell-command execution (e.g. Test stage)
     if (stageDef?.executionType === "shell-command") {
       const command = stageDef.templateOrCommand === "$testCommand"
@@ -676,6 +751,30 @@ export class HarnessOrchestrator {
         return { result: { success: false, output: "", logs: "", error: `Unknown provider: ${providerId}` }, providerUsed: providerId, modelUsed: model ?? null };
       }
       result = await runProviderPrompt(provider, prompt, run.repoPath, timeoutMs, model, thinkingLevel, logDir);
+    }
+
+    const statusDeclaration = parseStatusDeclaration(result.output);
+    if (statusDeclaration === "failed") {
+      return {
+        result: { ...result, success: false, error: `${stageName} reported STATUS: failed` },
+        providerUsed: providerId,
+        modelUsed: model ?? null,
+      };
+    }
+    if (statusDeclaration === "retry") {
+      return {
+        result: { ...result, success: false, error: `${stageName} reported STATUS: retry` },
+        providerUsed: providerId,
+        modelUsed: model ?? null,
+      };
+    }
+
+    if (stageDef?.templateOrCommand === "verify-browser" && hasVerifyBrowserBlockVerdict(result.output)) {
+      return {
+        result: { ...result, success: false, error: `${stageName} reported Verdict: block` },
+        providerUsed: providerId,
+        modelUsed: model ?? null,
+      };
     }
 
     // Apply success criteria generically
@@ -817,6 +916,13 @@ export class HarnessOrchestrator {
       writeFile(logsPath, logs, "utf8"),
     ]);
     return { artifactPath, logsPath };
+  }
+
+  private async resolveRunRepo(run: RunRecord): Promise<RepoConfig | null> {
+    if (!run.repoId) {
+      return null;
+    }
+    return this.store.getRepo(run.repoId);
   }
 
   private progressPath(runId: string): string {
