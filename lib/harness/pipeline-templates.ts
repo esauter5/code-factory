@@ -17,6 +17,7 @@ export interface StageDefinition {
   provider?: string;
   model?: string;
   thinkingLevel?: string;
+  requiresAgentBrowser?: boolean;
 }
 
 export interface PipelineTemplate {
@@ -30,17 +31,18 @@ export const BUILTIN_TEMPLATES: PipelineTemplate[] = [
   {
     id: "feature",
     label: "Feature",
-    description: "Full pipeline: Plan, Implement, Verify, Test, PR, Review",
+    description: "Full pipeline: Plan, Implement, Verify (browser), Test, PR, Review",
     stages: [
       { name: "Plan", executionType: "claude-prompt", templateOrCommand: "plan", timeoutMs: 600_000 },
       { name: "Implement", executionType: "claude-prompt", templateOrCommand: "implement", timeoutMs: 900_000 },
       {
         name: "Verify",
         executionType: "claude-prompt",
-        templateOrCommand: "verify",
+        templateOrCommand: "verify-browser",
         timeoutMs: 600_000,
         successCriteria: { failIfOutputContains: "BLOCKER:" },
         onFailure: { revertTo: "Implement", maxCycles: 3 },
+        requiresAgentBrowser: true,
       },
       {
         name: "Test",
@@ -158,4 +160,12 @@ export function getTemplateOrDefault(id?: string | null): PipelineTemplate {
     if (found) return found;
   }
   return BUILTIN_TEMPLATES.find((t) => t.id === DEFAULT_TEMPLATE_ID)!;
+}
+
+export function stageRequiresAgentBrowser(stage: StageDefinition): boolean {
+  return stage.requiresAgentBrowser === true;
+}
+
+export function templateRequiresAgentBrowser(template: PipelineTemplate): boolean {
+  return template.stages.some(stageRequiresAgentBrowser);
 }

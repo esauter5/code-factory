@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getTemplate } from "@/lib/harness/pipeline-templates";
-import { getOrchestrator, getAvailableProviders } from "@/lib/harness/singleton";
+import { getTemplate, getTemplateOrDefault, templateRequiresAgentBrowser } from "@/lib/harness/pipeline-templates";
+import { getOrchestrator, getAvailableProviders, getRuntimeCapabilities } from "@/lib/harness/singleton";
 import { DEFAULT_STAGE_ORDER, type PrMode, type RunnerMode, type StageOverrides } from "@/lib/harness/types";
 
 export const runtime = "nodejs";
@@ -56,25 +56,50 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "invalid templateId" }, { status: 400 });
   }
 
-  const orchestrator = getOrchestrator();
-  const run = await orchestrator.createRun({
-    ticket: payload.ticket.trim(),
-    repoPath: payload.repoPath?.trim() || ".",
-    repoId: payload.repoId?.trim() || undefined,
-    runnerMode,
-    testCommand: payload.testCommand?.trim() || "pnpm lint",
-    prMode,
-    templateId: payload.templateId,
-    model: payload.model?.trim() || undefined,
-    thinkingLevel: payload.thinkingLevel?.trim() || undefined,
-    stageOverrides: payload.stageOverrides,
-  });
+  const template = getTemplateOrDefault(payload.templateId);
+  if (templateRequiresAgentBrowser(template)) {
+    const capabilities = await getRuntimeCapabilities();
+    if (!capabilities.agentBrowser.available) {
+      return NextResponse.json(
+        {
+          error: [
+            `template '${template.id}' requires agent-browser, but it is not installed.`,
+            `Install: ${capabilities.agentBrowser.installCommand}`,
+            `Setup: ${capabilities.agentBrowser.setupCommand}`,
+          ].join(" "),
+          capabilities,
+        },
+        { status: 400 },
+      );
+    }
+  }
 
-  return NextResponse.json(
-    {
-      run,
-      template: DEFAULT_STAGE_ORDER,
-    },
-    { status: 201 },
-  );
+  const orchestrator = getOrchestrator();
+  try {
+    const run = await orchestrator.createRun({
+      ticket: payload.ticket.trim(),
+      repoPath: payload.repoPath?.trim() || ".",
+      repoId: payload.repoId?.trim() || undefined,
+      runnerMode,
+      testCommand: payload.testCommand?.trim() || "pnpm lint",
+      prMode,
+      templateId: payload.templateId,
+      model: payload.model?.trim() || undefined,
+      thinkingLevel: payload.thinkingLevel?.trim() || undefined,
+      stageOverrides: payload.stageOverrides,
+    });
+
+    return NextResponse.json(
+      {
+        run,
+        template: DEFAULT_STAGE_ORDER,
+      },
+      { status: 201 },
+    );
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "failed to create run" },
+      { status: 400 },
+    );
+  }
 }

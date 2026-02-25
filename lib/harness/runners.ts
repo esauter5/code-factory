@@ -4,7 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import type { StageDefinition } from "@/lib/harness/pipeline-templates";
-import type { ProviderInfo } from "@/lib/harness/providers";
+import type { ParsedProviderOutput, ProviderInfo } from "@/lib/harness/providers";
 import { getProvider, parseStreamJsonOutput } from "@/lib/harness/providers";
 import type { RunnerResult } from "@/lib/harness/types";
 
@@ -77,7 +77,7 @@ function parseProviderOutput(
   provider: ProviderInfo,
   stdout: string,
   stderr: string,
-): { output: string; success: boolean; error: string } {
+): ParsedProviderOutput {
   const parsedStdout = provider.parseOutput(stdout);
   if (parsedStdout.success) {
     return parsedStdout;
@@ -175,6 +175,10 @@ export async function runProviderPrompt(
           output: safeArtifactOutput(parsed.output, stdout),
           logs,
           error: `command timed out after ${Math.round(timeoutMs / 1000)}s`,
+          costUsd: parsed.costUsd,
+          inputTokens: parsed.inputTokens,
+          outputTokens: parsed.outputTokens,
+          durationMs: parsed.durationMs,
         });
         return;
       }
@@ -191,6 +195,10 @@ export async function runProviderPrompt(
           output: safeArtifactOutput(parsed.output, stdout),
           logs,
           error: resolvedError,
+          costUsd: parsed.costUsd,
+          inputTokens: parsed.inputTokens,
+          outputTokens: parsed.outputTokens,
+          durationMs: parsed.durationMs,
         });
         return;
       }
@@ -216,6 +224,10 @@ export async function runProviderPrompt(
         output: safeArtifactOutput(parsed.output, stdout),
         logs,
         error: resolvedError,
+        costUsd: parsed.costUsd,
+        inputTokens: parsed.inputTokens,
+        outputTokens: parsed.outputTokens,
+        durationMs: parsed.durationMs,
       });
     });
   });

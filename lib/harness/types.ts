@@ -5,7 +5,7 @@ export const DEFAULT_STAGE_ORDER = ["Plan", "Implement", "Verify", "Test", "PR"]
 export const STAGE_ORDER = DEFAULT_STAGE_ORDER;
 
 export type StageName = string;
-export type RunnerMode = "mock" | "claude" | "codex" | "gemini";
+export type RunnerMode = "mock" | "claude" | "codex";
 export type PrMode = "simulate" | "create";
 export type RunStatus = "queued" | "running" | "failed" | "done" | "cancelled";
 export type StageStatus = "queued" | "running" | "failed" | "done" | "skipped";
@@ -22,6 +22,12 @@ export interface StageAttempt {
   outputPreview: string;
   logsPreview: string;
   error: string;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number | null;
+  providerUsed: string | null;
+  modelUsed: string | null;
 }
 
 export interface StageRun {
@@ -51,6 +57,9 @@ export interface RepoConfig {
   setupScript: string;
   envFiles: string[];
   defaultTestCommand: string;
+  appBaseUrl?: string;
+  appStartCommand?: string;
+  appReadyPattern?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -96,6 +105,10 @@ export interface RunnerResult {
   output: string;
   logs: string;
   error: string;
+  costUsd?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  durationMs?: number;
 }
 
 export interface StageOverride {
@@ -117,4 +130,15 @@ export interface ProviderData {
     label: string;
     thinkingLevels: { id: string; label: string }[];
   }[];
+}
+
+export interface AgentBrowserCapabilityData {
+  available: boolean;
+  binary: string;
+  installCommand: string;
+  setupCommand: string;
+}
+
+export interface RuntimeCapabilitiesData {
+  agentBrowser: AgentBrowserCapabilityData;
 }

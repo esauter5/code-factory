@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Clock, Copy } from "lucide-react";
+import { Check, ChevronDown, Clock, Copy, ImageOff } from "lucide-react";
+import Image from "next/image";
 
 import { ExternalLink } from "lucide-react";
 
@@ -10,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { StageRun } from "@/lib/harness/types";
+import type { StageAttempt, StageRun } from "@/lib/harness/types";
 import { cn } from "@/lib/utils";
 
 import { StatusBadge } from "./status-badge";
@@ -196,8 +197,32 @@ interface StreamEvent {
   item?: Record<string, unknown>;
 }
 
-function parseLogEntries(rawContent: string): LogEntry[] {
-  const lines = rawContent.split("\n").filter((l) => l.trim());
+// ---------------------------------------------------------------------------
+// Format detection + branched parsers
+// ---------------------------------------------------------------------------
+
+type StreamFormat = "claude" | "codex";
+
+function detectStreamFormat(lines: string[]): StreamFormat {
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      // Codex signature: thread.started or any event with thread_id
+      if (event.type === "thread.started" || "thread_id" in event) return "codex";
+      // Codex item envelope events
+      if (event.type === "item.started" || event.type === "item.completed" || event.type === "item.updated") return "codex";
+      if (event.type === "turn.started" || event.type === "turn.completed" || event.type === "turn.failed") return "codex";
+      // Claude signature: system init or assistant with message.content
+      if (event.type === "system" || event.type === "result") return "claude";
+      if (event.type === "assistant" || event.type === "user") return "claude";
+    } catch {
+      // skip non-JSON lines
+    }
+  }
+  return "claude"; // safe default
+}
+
+function parseClaudeLogEntries(lines: string[]): LogEntry[] {
   const entries: LogEntry[] = [];
   const toolMap = new Map<string, LogEntry & { kind: "tool" }>();
 
@@ -206,12 +231,10 @@ function parseLogEntries(rawContent: string): LogEntry[] {
     try {
       event = JSON.parse(line) as StreamEvent;
     } catch {
-      // Non-JSON line — show raw
       entries.push({ kind: "raw", text: line });
       continue;
     }
 
-    // --- Claude / Gemini stream-json format ---
     if (event.type === "system") {
       let label = "";
       if (event.subtype === "init") {
@@ -267,22 +290,83 @@ function parseLogEntries(rawContent: string): LogEntry[] {
             parent.resultPreview = preview || null;
             parent.resultTotalLines = totalLines;
           }
-          // Don't push a new entry — result folds into existing tool entry
         }
       }
       continue;
     }
 
-    // --- Codex JSONL format (newer: item envelope) ---
-    if (event.item) {
+    // Unknown Claude event — skip
+  }
+
+  return entries;
+}
+
+interface CodexStreamEvent {
+  type?: string;
+  thread_id?: string;
+  message?: string;
+  content?: string;
+  text?: string;
+  usage?: {
+    input_tokens?: number;
+    cached_input_tokens?: number;
+    output_tokens?: number;
+  };
+  item?: {
+    type?: string;
+    text?: string;
+    content?: string;
+    message?: string;
+    command?: string;
+    aggregated_output?: string;
+    exit_code?: number | null;
+    status?: string;
+  };
+}
+
+function parseCodexLogEntries(lines: string[]): LogEntry[] {
+  const entries: LogEntry[] = [];
+
+  for (const line of lines) {
+    let event: CodexStreamEvent;
+    try {
+      event = JSON.parse(line) as CodexStreamEvent;
+    } catch {
+      entries.push({ kind: "raw", text: line });
+      continue;
+    }
+
+    // Lifecycle events
+    if (event.type === "thread.started") {
+      entries.push({ kind: "system", label: "codex session started" });
+      continue;
+    }
+    if (event.type === "turn.started") {
+      // subtle indicator, skip to reduce noise
+      continue;
+    }
+    if (event.type === "turn.completed") {
+      const tokens = event.usage;
+      const parts: string[] = ["completed"];
+      if (tokens?.input_tokens) parts.push(`${tokens.input_tokens} in`);
+      if (tokens?.output_tokens) parts.push(`${tokens.output_tokens} out`);
+      entries.push({ kind: "result", label: parts.join(" · ") });
+      continue;
+    }
+    if (event.type === "turn.failed") {
+      entries.push({ kind: "system", label: `error: ${event.message || "turn failed"}` });
+      continue;
+    }
+
+    // Item events — only process item.completed to avoid duplicates
+    if (event.type === "item.completed" && event.item) {
       const item = event.item;
       if (item.type === "agent_message" && typeof item.text === "string") {
-        entries.push({ kind: "text", preview: truncate(item.text as string, 200) });
+        entries.push({ kind: "text", preview: truncate(item.text, 200) });
       } else if (item.type === "command_execution" && typeof item.command === "string") {
-        const cmd = item.command as string;
-        const output = typeof item.aggregated_output === "string" ? (item.aggregated_output as string) : "";
-        const isDone = item.status === "completed";
-        const exitInfo = isDone ? ` → exit ${item.exit_code ?? "?"}` : "";
+        const cmd = item.command;
+        const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
+        const exitInfo = ` → exit ${item.exit_code ?? "?"}`;
         const { preview, totalLines } = extractResultPreview(output);
         entries.push({
           kind: "tool",
@@ -291,24 +375,39 @@ function parseLogEntries(rawContent: string): LogEntry[] {
           param: truncate(cmd, 60) + exitInfo,
           resultPreview: preview || null,
           resultTotalLines: totalLines,
-          status: isDone ? (item.exit_code === 0 ? "done" : "error") : "pending",
+          status: item.exit_code === 0 ? "done" : "error",
+        });
+      } else if (item.type === "file_change") {
+        entries.push({
+          kind: "tool",
+          id: `codex-${entries.length}`,
+          name: "FileChange",
+          param: typeof item.command === "string" ? truncate(item.command, 60) : "",
+          resultPreview: null,
+          resultTotalLines: 0,
+          status: "done",
         });
       } else if (item.type === "error") {
         entries.push({
           kind: "system",
-          label: `error: ${(item.message as string) || (item.text as string) || "unknown error"}`,
+          label: `error: ${item.message || item.text || "unknown error"}`,
         });
       }
       // skip reasoning blocks
       continue;
     }
 
-    // --- Codex JSONL format (legacy) ---
+    // Skip item.started / item.updated to prevent duplicates
+    if (event.type === "item.started" || event.type === "item.updated") {
+      continue;
+    }
+
+    // Legacy Codex format fallback
     if (event.type === "message" && typeof event.content === "string") {
       entries.push({ kind: "text", preview: truncate(event.content, 200) });
       continue;
     }
-    if (event.type === "text" && event.text) {
+    if (event.type === "text" && typeof event.text === "string") {
       entries.push({ kind: "text", preview: truncate(event.text, 200) });
       continue;
     }
@@ -318,10 +417,22 @@ function parseLogEntries(rawContent: string): LogEntry[] {
       continue;
     }
 
-    // Unknown JSON event — skip
+    // Unknown Codex event — skip
   }
 
   return entries;
+}
+
+function parseLogEntries(rawContent: string): LogEntry[] {
+  const lines = rawContent.split("\n").filter((l) => l.trim());
+  if (lines.length === 0) return [];
+
+  const format = detectStreamFormat(lines);
+
+  if (format === "codex") {
+    return parseCodexLogEntries(lines);
+  }
+  return parseClaudeLogEntries(lines);
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +493,31 @@ function LogEntryRow({ entry }: { entry: LogEntry }) {
 // LiveOutput component
 // ---------------------------------------------------------------------------
 
-function LiveOutput({ runId, stageName, active }: { runId: string; stageName: string; active: boolean }) {
+function formatProviderLabel(attempt: StageAttempt | null): string {
+  if (!attempt?.providerUsed) return "provider";
+  const provider = attempt.providerUsed;
+  const model = attempt.modelUsed;
+  if (model) return `${provider}/${model}`;
+  return provider;
+}
+
+function formatAttemptMeta(attempt: StageAttempt): string {
+  const parts: string[] = [];
+  if (attempt.providerUsed) {
+    parts.push(attempt.providerUsed.charAt(0).toUpperCase() + attempt.providerUsed.slice(1));
+    if (attempt.modelUsed) parts[parts.length - 1] += ` ${attempt.modelUsed}`;
+  }
+  if (attempt.costUsd != null) parts.push(`$${attempt.costUsd.toFixed(3)}`);
+  if (attempt.inputTokens != null || attempt.outputTokens != null) {
+    const tok: string[] = [];
+    if (attempt.inputTokens != null) tok.push(`${attempt.inputTokens} in`);
+    if (attempt.outputTokens != null) tok.push(`${attempt.outputTokens} out`);
+    parts.push(tok.join("/"));
+  }
+  return parts.length > 0 ? ` — ${parts.join(" · ")}` : "";
+}
+
+function LiveOutput({ runId, stageName, active, providerLabel }: { runId: string; stageName: string; active: boolean; providerLabel: string }) {
   const [content, setContent] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasFetchedOnce = useRef(false);
@@ -458,7 +593,7 @@ function LiveOutput({ runId, stageName, active }: { runId: string; stageName: st
               ? entries.map((entry, i) => <LogEntryRow key={i} entry={entry} />)
               : active && (
                   <span className="text-xs text-green-400/60">
-                    Waiting for Claude to start streaming...
+                    Waiting for {providerLabel} to start streaming...
                   </span>
                 )}
           </div>
@@ -493,11 +628,130 @@ function extractPrUrl(stage: StageRun, prUrl?: string | null): string | null {
   return match?.[0] ?? null;
 }
 
+interface EvidenceEntry {
+  path: string;
+  note: string;
+}
+
+function parseEvidenceEntries(output: string): EvidenceEntry[] {
+  if (!output) return [];
+  const entries: EvidenceEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    const marker = "EVIDENCE_PATH:";
+    const idx = line.indexOf(marker);
+    if (idx === -1) continue;
+
+    const content = line.slice(idx + marker.length).trim();
+    if (!content) continue;
+
+    const delimiterIdx = content.indexOf(" -- ");
+    const evidencePath = delimiterIdx === -1 ? content : content.slice(0, delimiterIdx).trim();
+    const note = delimiterIdx === -1 ? "" : content.slice(delimiterIdx + 4).trim();
+
+    if (!evidencePath || seen.has(evidencePath)) continue;
+    seen.add(evidencePath);
+    entries.push({ path: evidencePath, note });
+  }
+
+  return entries;
+}
+
+function evidenceName(evidencePath: string): string {
+  const normalized = evidencePath.replace(/\\/g, "/");
+  const last = normalized.split("/").at(-1);
+  return last && last.length > 0 ? last : evidencePath;
+}
+
+function resolveEvidencePath(evidencePath: string, attemptLogPath: string | null | undefined): string {
+  const trimmed = evidencePath.trim();
+  if (!trimmed) return trimmed;
+
+  // Absolute Unix, Windows drive, or UNC path
+  if (
+    trimmed.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(trimmed) ||
+    trimmed.startsWith("\\\\")
+  ) {
+    return trimmed;
+  }
+
+  if (!attemptLogPath) return trimmed;
+
+  const normalizedLogPath = attemptLogPath.replace(/\\/g, "/");
+  const baseDir = normalizedLogPath.endsWith(".txt")
+    ? normalizedLogPath.slice(0, normalizedLogPath.lastIndexOf("/"))
+    : normalizedLogPath;
+  const cleanBase = baseDir.replace(/\/+$/, "");
+  const cleanPath = trimmed.replace(/^\.?\//, "");
+  return `${cleanBase}/${cleanPath}`;
+}
+
+function EvidenceThumbnail({
+  runId,
+  evidencePath,
+  note,
+}: {
+  runId: string;
+  evidencePath: string;
+  note: string;
+}) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  const missingFromNote = /not captured/i.test(note);
+  const evidenceUrl = `/api/runs/${encodeURIComponent(runId)}/evidence?path=${encodeURIComponent(evidencePath)}`;
+  const missing = loadFailed || missingFromNote;
+
+  return (
+    <a
+      href={missing ? undefined : evidenceUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group rounded-md border overflow-hidden bg-background hover:border-primary/40 transition-colors"
+      title={evidencePath}
+      onClick={(event) => {
+        if (missing) event.preventDefault();
+      }}
+    >
+      {missing ? (
+        <div className="flex h-28 w-full items-center justify-center bg-muted text-muted-foreground">
+          <div className="flex flex-col items-center gap-1 text-[10px]">
+            <ImageOff className="h-4 w-4" />
+            <span>screenshot missing</span>
+          </div>
+        </div>
+      ) : (
+        <Image
+          src={evidenceUrl}
+          alt={note || evidenceName(evidencePath)}
+          width={640}
+          height={360}
+          unoptimized
+          className="block w-full h-28 object-cover bg-muted"
+          loading="lazy"
+          onError={() => setLoadFailed(true)}
+        />
+      )}
+      <div className="px-2 py-1.5">
+        <p className="text-[10px] font-mono truncate">{evidenceName(evidencePath)}</p>
+        {note && (
+          <p className="text-[10px] text-muted-foreground line-clamp-2">{note}</p>
+        )}
+      </div>
+    </a>
+  );
+}
+
 export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: string; prUrl?: string | null }) {
   const [selectedAttemptIdx, setSelectedAttemptIdx] = useState<number | null>(null);
   const latest = stage.attempts.at(-1) ?? null;
   const viewing = selectedAttemptIdx !== null ? stage.attempts[selectedAttemptIdx] ?? latest : latest;
   const detectedPrUrl = extractPrUrl(stage, prUrl);
+  const evidenceEntries = useMemo(
+    () => parseEvidenceEntries(viewing?.outputPreview || ""),
+    [viewing?.outputPreview],
+  );
 
   return (
     <div className="flex flex-col gap-3 py-3">
@@ -529,7 +783,7 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
             >
               {stage.attempts.map((a, i) => (
                 <option key={a.attempt} value={i}>
-                  Attempt {a.attempt}{a.cycle ? ` (cycle ${a.cycle})` : ""}{i === stage.attempts.length - 1 ? " (latest)" : ""}
+                  Attempt {a.attempt}{a.cycle ? ` (cycle ${a.cycle})` : ""}{formatAttemptMeta(a)}{i === stage.attempts.length - 1 ? " (latest)" : ""}
                 </option>
               ))}
             </select>
@@ -545,11 +799,30 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
 
       {/* stream log — live when running, static when complete */}
       {stage.attempts.length > 0 && (
-        <LiveOutput runId={runId} stageName={stage.name} active={stage.status === "running"} />
+        <LiveOutput runId={runId} stageName={stage.name} active={stage.status === "running"} providerLabel={formatProviderLabel(latest)} />
       )}
 
       {/* content sections — show selected attempt's data */}
       <div className="flex flex-col gap-1.5">
+        {evidenceEntries.length > 0 && (
+          <div className="rounded-md border bg-muted/20 p-3">
+            <p className="text-xs font-semibold mb-2">Evidence</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {evidenceEntries.map((entry) => {
+                const resolvedEvidencePath = resolveEvidencePath(entry.path, viewing?.logPath);
+                return (
+                  <EvidenceThumbnail
+                    key={entry.path}
+                    runId={runId}
+                    evidencePath={resolvedEvidencePath}
+                    note={entry.note}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <CollapsibleSection
           title="Prompt"
           defaultOpen={false}
@@ -623,13 +896,19 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
                     </div>
                     <StatusBadge status={attempt.status} />
                   </div>
-                  <div className="flex items-center gap-4 text-muted-foreground">
+                  <div className="flex items-center gap-4 text-muted-foreground flex-wrap">
                     <span>{displayDate(attempt.startedAt)}</span>
                     {attempt.endedAt && (
                       <span className="inline-flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {elapsed(attempt.startedAt, attempt.endedAt)}
                       </span>
+                    )}
+                    {attempt.providerUsed && (
+                      <span>{attempt.providerUsed}{attempt.modelUsed ? `/${attempt.modelUsed}` : ""}</span>
+                    )}
+                    {attempt.costUsd != null && (
+                      <span>${attempt.costUsd.toFixed(3)}</span>
                     )}
                   </div>
                 </button>

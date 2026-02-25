@@ -11,6 +11,7 @@ Your job is to write working code that fulfills the plan. You are the ONLY stage
 5. Do NOT leave TODOs, placeholders, or incomplete work.
 6. If the file {{progress_path}} exists, read it for context on prior attempts and adjust your approach.
 7. If feedback from prior attempts is provided below, you MUST address every issue raised.
+8. If `agent_browser_available` is `true` and this ticket involves UI/browser behavior, use `agent-browser` to reproduce and validate flows before finishing.
 </rules>
 
 <context>
@@ -29,12 +30,24 @@ Your job is to write working code that fulfills the plan. You are the ONLY stage
 {{feedback}}
 </feedback>
 
+<runtime>
+agent_browser_available: {{agent_browser_available}}
+agent_browser_install_command: {{agent_browser_install_command}}
+agent_browser_setup_command: {{agent_browser_setup_command}}
+app_base_url: {{app_base_url}}
+app_start_command: {{app_start_command}}
+app_ready_pattern: {{app_ready_pattern}}
+attempt_dir: {{attempt_dir}}
+</runtime>
+
 <instructions>
 1. Read the plan carefully. Understand the scope, phases, and tasks.
 2. Explore the repository to understand existing code structure and conventions.
 3. Execute the plan's tasks in order, writing all necessary code.
-4. Run any validation commands specified in the plan to verify your work.
-5. After all code changes are complete, produce the implementation summary below.
+4. For UI/browser tasks, run targeted browser validation using `agent-browser` when available.
+5. Save screenshots to `{{attempt_dir}}/evidence/` when browser validation is used.
+6. Run any validation commands specified in the plan to verify your work.
+7. After all code changes are complete, produce the implementation summary below.
 
 IMPORTANT: Your primary job is writing code. The summary is secondary -- focus your effort on correct, complete implementation.
 </instructions>
@@ -60,6 +73,9 @@ After completing all code changes, output a markdown implementation summary:
 ## Validation Results
 - `<command ran>`: <pass/fail and relevant output>
 - `<command ran>`: <pass/fail and relevant output>
+
+## Browser Validation Evidence
+- `EVIDENCE_PATH: <path>` -- <what was verified in browser> (omit this section if browser validation was not needed)
 
 STATUS: done
 </output_format>

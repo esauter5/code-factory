@@ -85,6 +85,9 @@ export function useRepos() {
       setupScript?: string;
       envFiles?: string[];
       defaultTestCommand?: string;
+      appBaseUrl?: string;
+      appStartCommand?: string;
+      appReadyPattern?: string;
     }): Promise<RepoConfig | null> => {
       try {
         setError("");
@@ -107,6 +110,9 @@ export function useRepos() {
         setupScript?: string;
         envFiles?: string[];
         defaultTestCommand?: string;
+        appBaseUrl?: string;
+        appStartCommand?: string;
+        appReadyPattern?: string;
       },
     ): Promise<RepoConfig | null> => {
       try {

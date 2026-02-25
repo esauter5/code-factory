@@ -7,11 +7,12 @@ A local-first control plane for running AI coding agents through structured SDLC
 ## Features
 
 - **Pipeline templates** — Feature, Bug Fix, Refactor, Docs, and Review workflows with pre-configured stage sequences
-- **Multi-provider support** — Claude, Codex, and Gemini (auto-detected from your local CLI installs), plus a mock mode that works with zero setup
+- **Multi-provider support** — Claude and Codex (auto-detected from your local CLI installs), plus a mock mode that works with zero setup
 - **Kanban board UI** — Runs flow through columns as stages complete, with real-time progress updates
 - **Stage controls** — Retry a stage, retry from a stage, edit the prompt and rerun, or skip with a reason
 - **Stage detail drawer** — View the full prompt, output artifact, streaming logs, and errors for every attempt
 - **Per-stage overrides** — Swap the provider, model, or thinking level for individual stages without changing the run config
+- **Browser-powered Verify** — Feature pipeline Verify stage runs browser validation and captures evidence via `agent-browser`
 - **Repo management** — Register repos with custom setup scripts, test commands, and env file patterns; runs get isolated git worktrees automatically
 - **File-backed persistence** — Everything lives in JSON and flat files. No database, no external services
 
@@ -46,16 +47,26 @@ To use actual AI agents instead of mock mode, install and authenticate the CLI f
 |----------|-----|-------|
 | Claude | `claude` | [Install Claude Code](https://docs.anthropic.com/en/docs/claude-code) and sign in |
 | Codex | `codex` | [Install Codex CLI](https://github.com/openai/codex) and authenticate |
-| Gemini | `gemini` | [Install Gemini CLI](https://github.com/google-gemini/gemini-cli) and authenticate |
 
 Code Factory auto-detects which CLIs are available on your system and shows them in the runner mode dropdown when creating a run.
+
+### Browser Verification (required for browser-enabled templates)
+
+Feature runs use a browser-aware Verify stage and require `agent-browser`:
+
+```bash
+npm install -g agent-browser
+agent-browser install
+```
+
+If `agent-browser` is missing, browser-enabled runs fail fast at creation with setup instructions.
 
 ## Pipeline Templates
 
 | Template | Stages | Use case |
 |----------|--------|----------|
-| **Feature** | Plan → Implement → Verify → Test → PR | Full SDLC for new features |
-| **Bug Fix** | Plan → Implement → Test → PR | Skips verification for faster fixes |
+| **Feature** | Plan → Implement → Verify (browser) → Test → PR → Review | Full SDLC for new features with browser validation |
+| **Bug Fix** | Plan → Implement → Test → PR → Review | Faster fixes with final review |
 | **Refactor** | Plan → Implement → Test | No PR — for internal cleanups |
 | **Docs** | Plan → Implement → PR | Lightweight flow for documentation |
 | **Review** | Plan → Verify | Review-only, no implementation |
@@ -70,13 +81,13 @@ app/
   _hooks/                   # Client hooks (polling, actions, repo CRUD)
 lib/harness/
   orchestrator.ts           # Execution engine — drives stages sequentially
-  providers.ts              # CLI abstraction for Claude, Codex, Gemini
+  providers.ts              # CLI abstraction for Claude and Codex
   pipeline-templates.ts     # Built-in template definitions
   runners.ts                # Stage execution handlers
   prompts.ts                # Prompt template loading and variable rendering
   store.ts                  # JSON file persistence
   workspace-manager.ts      # Git worktree provisioning
-prompt-templates/           # Prompt .txt files for each stage (plan, implement, verify, test, pr)
+prompt-templates/           # Stage prompt contracts and templates (including verify-browser)
 runs/                       # Created at runtime — attempt artifacts, logs, and progress files
 .data/                      # Created at runtime — store.json
 ```
