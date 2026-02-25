@@ -22,8 +22,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { BUILTIN_TEMPLATES, DEFAULT_TEMPLATE_ID } from "@/lib/harness/pipeline-templates";
-import type { PrMode, ProviderData, RepoConfig, RunRecord, RunnerMode } from "@/lib/harness/types";
+import {
+  BUILTIN_TEMPLATES,
+  DEFAULT_TEMPLATE_ID,
+  templateRequiresAgentBrowser,
+} from "@/lib/harness/pipeline-templates";
+import type {
+  PrMode,
+  ProviderData,
+  RepoConfig,
+  RunRecord,
+  RunnerMode,
+  RuntimeCapabilitiesData,
+} from "@/lib/harness/types";
 
 import type { DirectoryBrowseResponse, DirectoryEntry } from "../_hooks/use-run-actions";
 
@@ -64,6 +75,7 @@ export function NewRunDialog({
   const [prMode, setPrMode] = useState<PrMode>("simulate");
   const [templateId, setTemplateId] = useState(DEFAULT_TEMPLATE_ID);
   const [providers, setProviders] = useState<ProviderData[]>([]);
+  const [capabilities, setCapabilities] = useState<RuntimeCapabilitiesData | null>(null);
 
   const [showPicker, setShowPicker] = useState(false);
   const [pickerLoading, setPickerLoading] = useState(false);
@@ -78,8 +90,9 @@ export function NewRunDialog({
     if (!open) return;
     void fetch("/api/providers")
       .then((res) => res.json())
-      .then((data: { providers: ProviderData[] }) => {
+      .then((data: { providers: ProviderData[]; capabilities?: RuntimeCapabilitiesData }) => {
         setProviders(data.providers ?? []);
+        setCapabilities(data.capabilities ?? null);
       })
       .catch(() => {});
   }, [open]);
@@ -116,6 +129,11 @@ export function NewRunDialog({
   };
 
   const selectedTemplate = BUILTIN_TEMPLATES.find((t) => t.id === templateId);
+  const selectedTemplateRequiresAgentBrowser = selectedTemplate
+    ? templateRequiresAgentBrowser(selectedTemplate)
+    : false;
+  const agentBrowser = capabilities?.agentBrowser ?? null;
+  const isBlockedByMissingAgentBrowser = selectedTemplateRequiresAgentBrowser && !agentBrowser?.available;
 
   const loadDirectory = useCallback(
     async (targetPath: string) => {
@@ -327,6 +345,19 @@ export function NewRunDialog({
               {selectedTemplate && (
                 <p className="text-[11px] text-muted-foreground">{selectedTemplate.description}</p>
               )}
+              {selectedTemplateRequiresAgentBrowser && (
+                <div className={`rounded-md border px-2 py-1.5 text-[11px] ${isBlockedByMissingAgentBrowser ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"}`}>
+                  {isBlockedByMissingAgentBrowser ? (
+                    <>
+                      <p className="font-medium">Browser verification requires `agent-browser`.</p>
+                      <p className="mt-0.5 font-mono">Install: {agentBrowser?.installCommand ?? "npm install -g agent-browser"}</p>
+                      <p className="font-mono">Setup: {agentBrowser?.setupCommand ?? "agent-browser install"}</p>
+                    </>
+                  ) : (
+                    <p className="font-medium">`agent-browser` detected. Browser Verify is enabled for this template.</p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -452,7 +483,7 @@ export function NewRunDialog({
             <Button variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button disabled={loading || !ticket.trim()} onClick={handleSubmit}>
+            <Button disabled={loading || !ticket.trim() || isBlockedByMissingAgentBrowser} onClick={handleSubmit}>
               Create + Start
             </Button>
           </DialogFooter>

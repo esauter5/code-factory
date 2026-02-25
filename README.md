@@ -12,6 +12,7 @@ A local-first control plane for running AI coding agents through structured SDLC
 - **Stage controls** — Retry a stage, retry from a stage, edit the prompt and rerun, or skip with a reason
 - **Stage detail drawer** — View the full prompt, output artifact, streaming logs, and errors for every attempt
 - **Per-stage overrides** — Swap the provider, model, or thinking level for individual stages without changing the run config
+- **Browser-powered Verify** — Feature pipeline Verify stage runs browser validation and captures evidence via `agent-browser`
 - **Repo management** — Register repos with custom setup scripts, test commands, and env file patterns; runs get isolated git worktrees automatically
 - **File-backed persistence** — Everything lives in JSON and flat files. No database, no external services
 
@@ -49,12 +50,23 @@ To use actual AI agents instead of mock mode, install and authenticate the CLI f
 
 Code Factory auto-detects which CLIs are available on your system and shows them in the runner mode dropdown when creating a run.
 
+### Browser Verification (required for browser-enabled templates)
+
+Feature runs use a browser-aware Verify stage and require `agent-browser`:
+
+```bash
+npm install -g agent-browser
+agent-browser install
+```
+
+If `agent-browser` is missing, browser-enabled runs fail fast at creation with setup instructions.
+
 ## Pipeline Templates
 
 | Template | Stages | Use case |
 |----------|--------|----------|
-| **Feature** | Plan → Implement → Verify → Test → PR | Full SDLC for new features |
-| **Bug Fix** | Plan → Implement → Test → PR | Skips verification for faster fixes |
+| **Feature** | Plan → Implement → Verify (browser) → Test → PR → Review | Full SDLC for new features with browser validation |
+| **Bug Fix** | Plan → Implement → Test → PR → Review | Faster fixes with final review |
 | **Refactor** | Plan → Implement → Test | No PR — for internal cleanups |
 | **Docs** | Plan → Implement → PR | Lightweight flow for documentation |
 | **Review** | Plan → Verify | Review-only, no implementation |
@@ -75,7 +87,7 @@ lib/harness/
   prompts.ts                # Prompt template loading and variable rendering
   store.ts                  # JSON file persistence
   workspace-manager.ts      # Git worktree provisioning
-prompt-templates/           # Prompt .txt files for each stage (plan, implement, verify, test, pr)
+prompt-templates/           # Stage prompt contracts and templates (including verify-browser)
 runs/                       # Created at runtime — attempt artifacts, logs, and progress files
 .data/                      # Created at runtime — store.json
 ```

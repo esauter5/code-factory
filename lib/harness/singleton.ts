@@ -1,9 +1,11 @@
 import path from "node:path";
 
+import { detectRuntimeCapabilities } from "@/lib/harness/capabilities";
 import { HarnessOrchestrator } from "@/lib/harness/orchestrator";
 import type { ProviderInfo } from "@/lib/harness/providers";
 import { detectProviders, getAllProviders } from "@/lib/harness/providers";
 import { JsonRunStore } from "@/lib/harness/store";
+import type { RuntimeCapabilitiesData } from "@/lib/harness/types";
 
 const globalForHarness = globalThis as {
   __harness_orchestrator__?: HarnessOrchestrator;
@@ -37,4 +39,8 @@ export async function getAvailableProviders(): Promise<ProviderInfo[]> {
     globalForHarness.__harness_providers_detected__ = true;
   }
   return globalForHarness.__harness_providers__ ?? getAllProviders();
+}
+
+export async function getRuntimeCapabilities(): Promise<RuntimeCapabilitiesData> {
+  return detectRuntimeCapabilities();
 }

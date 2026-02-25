@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 
-import { getAvailableProviders } from "@/lib/harness/singleton";
+import { getAvailableProviders, getRuntimeCapabilities } from "@/lib/harness/singleton";
 
 export const runtime = "nodejs";
 
 export async function GET(): Promise<NextResponse> {
-  const providers = await getAvailableProviders();
+  const [providers, capabilities] = await Promise.all([
+    getAvailableProviders(),
+    getRuntimeCapabilities(),
+  ]);
   return NextResponse.json({
     providers: providers.map((p) => ({
       id: p.id,
@@ -18,5 +21,6 @@ export async function GET(): Promise<NextResponse> {
         thinkingLevels: m.thinkingLevels,
       })),
     })),
+    capabilities,
   });
 }

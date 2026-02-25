@@ -23,6 +23,9 @@ interface UpdateRepoPayload {
   setupScript?: string;
   envFiles?: string[];
   defaultTestCommand?: string;
+  appBaseUrl?: string;
+  appStartCommand?: string;
+  appReadyPattern?: string;
 }
 
 export async function PUT(request: NextRequest, { params }: RouteParams): Promise<NextResponse> {
@@ -38,6 +41,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams): Promis
   if (payload.setupScript !== undefined) repo.setupScript = payload.setupScript.trim();
   if (payload.envFiles !== undefined) repo.envFiles = payload.envFiles;
   if (payload.defaultTestCommand !== undefined) repo.defaultTestCommand = payload.defaultTestCommand.trim();
+  if (payload.appBaseUrl !== undefined) repo.appBaseUrl = payload.appBaseUrl.trim();
+  if (payload.appStartCommand !== undefined) repo.appStartCommand = payload.appStartCommand.trim();
+  if (payload.appReadyPattern !== undefined) repo.appReadyPattern = payload.appReadyPattern.trim();
   repo.updatedAt = new Date().toISOString();
 
   const updated = await orchestrator.saveRepo(repo);

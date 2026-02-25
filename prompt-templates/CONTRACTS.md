@@ -17,6 +17,13 @@ from the orchestrator. Missing keys render as empty strings.
 | `repo_context` | RunRecord | Repository summary (tech stack, structure) |
 | `progress_path` | RunRecord | Path to progress tracking file |
 | `feedback` | buildFeedback() | Markdown summary of prior failed attempts |
+| `attempt_dir` | Orchestrator | Current stage attempt directory (`runs/<runId>/<stage>/attempt-<n>`) |
+| `app_base_url` | RepoConfig/default | Target app URL for browser verification |
+| `app_start_command` | RepoConfig/default | Command to start the app for browser checks |
+| `app_ready_pattern` | RepoConfig/default | String/pattern used to determine app readiness |
+| `agent_browser_available` | Runtime capability detection | `"true"`/`"false"` capability flag |
+| `agent_browser_install_command` | Runtime capability detection | Install command to show users |
+| `agent_browser_setup_command` | Runtime capability detection | Setup command to show users |
 
 ### Stage-Specific
 | Variable | Available In | Source |
@@ -74,17 +81,19 @@ The status line establishes a convention for future contract enforcement.
 
 ### Implement (Stage 2 of 6)
 - **Type**: claude-prompt
-- **Inputs**: ticket, plan_artifact, repo_context, feedback, progress_path
+- **Inputs**: ticket, plan_artifact, repo_context, feedback, progress_path, attempt_dir, app_base_url, app_start_command, app_ready_pattern, agent_browser_available
 - **Output**: Code changes + structured markdown implementation summary
 - **Success**: No criteria -- always passes if the LLM returns output
 - **Consumed by**: Verify (as implementation_artifact), Test, PR, Review
 
 ### Verify (Stage 3 of 6)
 - **Type**: claude-prompt
-- **Inputs**: ticket, plan_artifact, implementation_artifact, feedback, progress_path
-- **Output**: Blocker findings or "No blocker findings."
+- **Template**: `verify-browser.txt` for browser-enabled templates
+- **Inputs**: ticket, plan_artifact, implementation_artifact, feedback, progress_path, attempt_dir, app_base_url, app_start_command, app_ready_pattern
+- **Output**: Browser verification report containing scenarios, evidence (`EVIDENCE_PATH:` entries), findings, and verdict
 - **Success**: Fails if output contains "BLOCKER:" (case-insensitive)
 - **On failure**: Reverts to Implement (max 3 cycles)
+- **Runtime requirement**: `agent-browser` must be installed for stages marked `requiresAgentBrowser`; run creation fails fast otherwise.
 
 ### Test (Stage 4 of 6)
 - **Type**: shell-command

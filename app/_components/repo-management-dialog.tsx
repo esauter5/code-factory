@@ -41,6 +41,9 @@ export function RepoManagementDialog({
     setupScript?: string;
     envFiles?: string[];
     defaultTestCommand?: string;
+    appBaseUrl?: string;
+    appStartCommand?: string;
+    appReadyPattern?: string;
   }) => Promise<RepoConfig | null>;
   onUpdateRepo: (
     repoId: string,
@@ -49,6 +52,9 @@ export function RepoManagementDialog({
       setupScript?: string;
       envFiles?: string[];
       defaultTestCommand?: string;
+      appBaseUrl?: string;
+      appStartCommand?: string;
+      appReadyPattern?: string;
     },
   ) => Promise<RepoConfig | null>;
   onDeleteRepo: (repoId: string) => Promise<boolean>;
@@ -64,6 +70,9 @@ export function RepoManagementDialog({
   const [setupScript, setSetupScript] = useState("");
   const [envFiles, setEnvFiles] = useState("");
   const [defaultTestCommand, setDefaultTestCommand] = useState("pnpm lint");
+  const [appBaseUrl, setAppBaseUrl] = useState("http://127.0.0.1:3000");
+  const [appStartCommand, setAppStartCommand] = useState("pnpm dev");
+  const [appReadyPattern, setAppReadyPattern] = useState("ready");
 
   // Picker state
   const [showPicker, setShowPicker] = useState(false);
@@ -80,6 +89,9 @@ export function RepoManagementDialog({
     setSetupScript("");
     setEnvFiles("");
     setDefaultTestCommand("pnpm lint");
+    setAppBaseUrl("http://127.0.0.1:3000");
+    setAppStartCommand("pnpm dev");
+    setAppReadyPattern("ready");
     setEditingRepo(null);
     setShowPicker(false);
   };
@@ -95,6 +107,9 @@ export function RepoManagementDialog({
     setSetupScript(repo.setupScript);
     setEnvFiles(repo.envFiles.join(", "));
     setDefaultTestCommand(repo.defaultTestCommand);
+    setAppBaseUrl(repo.appBaseUrl || "http://127.0.0.1:3000");
+    setAppStartCommand(repo.appStartCommand || "pnpm dev");
+    setAppReadyPattern(repo.appReadyPattern || "ready");
     setView("edit");
   };
 
@@ -135,6 +150,9 @@ export function RepoManagementDialog({
       setupScript: setupScript.trim() || undefined,
       envFiles: envFileList.length > 0 ? envFileList : undefined,
       defaultTestCommand: defaultTestCommand.trim() || undefined,
+      appBaseUrl: appBaseUrl.trim() || undefined,
+      appStartCommand: appStartCommand.trim() || undefined,
+      appReadyPattern: appReadyPattern.trim() || undefined,
     });
     setSaving(false);
     if (result) {
@@ -154,6 +172,9 @@ export function RepoManagementDialog({
       setupScript: setupScript.trim(),
       envFiles: envFileList,
       defaultTestCommand: defaultTestCommand.trim(),
+      appBaseUrl: appBaseUrl.trim(),
+      appStartCommand: appStartCommand.trim(),
+      appReadyPattern: appReadyPattern.trim(),
     });
     setSaving(false);
     if (result) {
@@ -365,6 +386,40 @@ export function RepoManagementDialog({
                     value={defaultTestCommand}
                     onChange={(e) => setDefaultTestCommand(e.target.value)}
                   />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-medium">App Base URL</label>
+                  <Input
+                    className="text-sm font-mono"
+                    placeholder="http://127.0.0.1:3000"
+                    value={appBaseUrl}
+                    onChange={(e) => setAppBaseUrl(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Used by browser verification prompts as the default app URL.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium">App Start Command</label>
+                    <Input
+                      className="text-sm font-mono"
+                      placeholder="pnpm dev"
+                      value={appStartCommand}
+                      onChange={(e) => setAppStartCommand(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium">App Ready Pattern</label>
+                    <Input
+                      className="text-sm font-mono"
+                      placeholder="ready"
+                      value={appReadyPattern}
+                      onChange={(e) => setAppReadyPattern(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
             )}

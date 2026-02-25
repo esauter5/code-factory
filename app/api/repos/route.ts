@@ -11,6 +11,9 @@ interface CreateRepoPayload {
   setupScript?: string;
   envFiles?: string[];
   defaultTestCommand?: string;
+  appBaseUrl?: string;
+  appStartCommand?: string;
+  appReadyPattern?: string;
 }
 
 export async function GET(): Promise<NextResponse> {
@@ -40,6 +43,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     setupScript: payload.setupScript?.trim() ?? "",
     envFiles: payload.envFiles ?? [],
     defaultTestCommand: payload.defaultTestCommand?.trim() ?? "pnpm lint",
+    appBaseUrl: payload.appBaseUrl?.trim() || "http://127.0.0.1:3000",
+    appStartCommand: payload.appStartCommand?.trim() || "pnpm dev",
+    appReadyPattern: payload.appReadyPattern?.trim() || "ready",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });

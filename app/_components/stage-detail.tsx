@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Clock, Copy } from "lucide-react";
+import { Check, ChevronDown, Clock, Copy, ImageOff } from "lucide-react";
+import Image from "next/image";
 
 import { ExternalLink } from "lucide-react";
 
@@ -627,11 +628,130 @@ function extractPrUrl(stage: StageRun, prUrl?: string | null): string | null {
   return match?.[0] ?? null;
 }
 
+interface EvidenceEntry {
+  path: string;
+  note: string;
+}
+
+function parseEvidenceEntries(output: string): EvidenceEntry[] {
+  if (!output) return [];
+  const entries: EvidenceEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const rawLine of output.split("\n")) {
+    const line = rawLine.trim();
+    const marker = "EVIDENCE_PATH:";
+    const idx = line.indexOf(marker);
+    if (idx === -1) continue;
+
+    const content = line.slice(idx + marker.length).trim();
+    if (!content) continue;
+
+    const delimiterIdx = content.indexOf(" -- ");
+    const evidencePath = delimiterIdx === -1 ? content : content.slice(0, delimiterIdx).trim();
+    const note = delimiterIdx === -1 ? "" : content.slice(delimiterIdx + 4).trim();
+
+    if (!evidencePath || seen.has(evidencePath)) continue;
+    seen.add(evidencePath);
+    entries.push({ path: evidencePath, note });
+  }
+
+  return entries;
+}
+
+function evidenceName(evidencePath: string): string {
+  const normalized = evidencePath.replace(/\\/g, "/");
+  const last = normalized.split("/").at(-1);
+  return last && last.length > 0 ? last : evidencePath;
+}
+
+function resolveEvidencePath(evidencePath: string, attemptLogPath: string | null | undefined): string {
+  const trimmed = evidencePath.trim();
+  if (!trimmed) return trimmed;
+
+  // Absolute Unix, Windows drive, or UNC path
+  if (
+    trimmed.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(trimmed) ||
+    trimmed.startsWith("\\\\")
+  ) {
+    return trimmed;
+  }
+
+  if (!attemptLogPath) return trimmed;
+
+  const normalizedLogPath = attemptLogPath.replace(/\\/g, "/");
+  const baseDir = normalizedLogPath.endsWith(".txt")
+    ? normalizedLogPath.slice(0, normalizedLogPath.lastIndexOf("/"))
+    : normalizedLogPath;
+  const cleanBase = baseDir.replace(/\/+$/, "");
+  const cleanPath = trimmed.replace(/^\.?\//, "");
+  return `${cleanBase}/${cleanPath}`;
+}
+
+function EvidenceThumbnail({
+  runId,
+  evidencePath,
+  note,
+}: {
+  runId: string;
+  evidencePath: string;
+  note: string;
+}) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  const missingFromNote = /not captured/i.test(note);
+  const evidenceUrl = `/api/runs/${encodeURIComponent(runId)}/evidence?path=${encodeURIComponent(evidencePath)}`;
+  const missing = loadFailed || missingFromNote;
+
+  return (
+    <a
+      href={missing ? undefined : evidenceUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group rounded-md border overflow-hidden bg-background hover:border-primary/40 transition-colors"
+      title={evidencePath}
+      onClick={(event) => {
+        if (missing) event.preventDefault();
+      }}
+    >
+      {missing ? (
+        <div className="flex h-28 w-full items-center justify-center bg-muted text-muted-foreground">
+          <div className="flex flex-col items-center gap-1 text-[10px]">
+            <ImageOff className="h-4 w-4" />
+            <span>screenshot missing</span>
+          </div>
+        </div>
+      ) : (
+        <Image
+          src={evidenceUrl}
+          alt={note || evidenceName(evidencePath)}
+          width={640}
+          height={360}
+          unoptimized
+          className="block w-full h-28 object-cover bg-muted"
+          loading="lazy"
+          onError={() => setLoadFailed(true)}
+        />
+      )}
+      <div className="px-2 py-1.5">
+        <p className="text-[10px] font-mono truncate">{evidenceName(evidencePath)}</p>
+        {note && (
+          <p className="text-[10px] text-muted-foreground line-clamp-2">{note}</p>
+        )}
+      </div>
+    </a>
+  );
+}
+
 export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: string; prUrl?: string | null }) {
   const [selectedAttemptIdx, setSelectedAttemptIdx] = useState<number | null>(null);
   const latest = stage.attempts.at(-1) ?? null;
   const viewing = selectedAttemptIdx !== null ? stage.attempts[selectedAttemptIdx] ?? latest : latest;
   const detectedPrUrl = extractPrUrl(stage, prUrl);
+  const evidenceEntries = useMemo(
+    () => parseEvidenceEntries(viewing?.outputPreview || ""),
+    [viewing?.outputPreview],
+  );
 
   return (
     <div className="flex flex-col gap-3 py-3">
@@ -684,6 +804,25 @@ export function StageDetail({ stage, runId, prUrl }: { stage: StageRun; runId: s
 
       {/* content sections — show selected attempt's data */}
       <div className="flex flex-col gap-1.5">
+        {evidenceEntries.length > 0 && (
+          <div className="rounded-md border bg-muted/20 p-3">
+            <p className="text-xs font-semibold mb-2">Evidence</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+              {evidenceEntries.map((entry) => {
+                const resolvedEvidencePath = resolveEvidencePath(entry.path, viewing?.logPath);
+                return (
+                  <EvidenceThumbnail
+                    key={entry.path}
+                    runId={runId}
+                    evidencePath={resolvedEvidencePath}
+                    note={entry.note}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <CollapsibleSection
           title="Prompt"
           defaultOpen={false}

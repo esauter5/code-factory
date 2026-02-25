@@ -57,6 +57,9 @@ export interface RepoConfig {
   setupScript: string;
   envFiles: string[];
   defaultTestCommand: string;
+  appBaseUrl?: string;
+  appStartCommand?: string;
+  appReadyPattern?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,4 +130,15 @@ export interface ProviderData {
     label: string;
     thinkingLevels: { id: string; label: string }[];
   }[];
+}
+
+export interface AgentBrowserCapabilityData {
+  available: boolean;
+  binary: string;
+  installCommand: string;
+  setupCommand: string;
+}
+
+export interface RuntimeCapabilitiesData {
+  agentBrowser: AgentBrowserCapabilityData;
 }
